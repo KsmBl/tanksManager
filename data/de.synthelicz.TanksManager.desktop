@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Tanks Manager
+GenericName=Task Manager
+Comment=Watch processes, performance, network, disks and services
+Exec=tanksmanager
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;GTK;
+Keywords=task;process;monitor;system;kill;cpu;memory;performance;services;
+StartupNotify=true
+StartupWMClass=de.synthelicz.TanksManager
+Actions=Processes;Performance;
+
+[Desktop Action Processes]
+Name=Processes
+Exec=tanksmanager --tab processes
+
+[Desktop Action Performance]
+Name=Performance
+Exec=tanksmanager --tab performance
