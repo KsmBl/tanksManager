@@ -47,7 +47,7 @@ SEGMENT_GAP = 1
 # times the history in the same box. SQUASH_RATIO is how many times more
 # samples the plate holds than the linear half alone.
 SQUASH_RATIO = 7.0
-GRID_MIN_GAP = 9.0                   # closest two vertical rules may sit
+GRID_MIN_GAP = 3.0                   # closest two vertical rules may sit
 
 
 def grid_shape(n):
@@ -390,29 +390,22 @@ class HistoryGraph(Gtk.DrawingArea):
         cols, rows = self.grid_cells
         cr.set_line_width(1.0)
         cr.set_source_rgb(*pal.grid)
-        # Vertical lines mark a fixed number of samples, not a fixed number
-        # of pixels, and are drawn through the same axis as the data. So
-        # they crowd together towards the left exactly as the readings do,
-        # which is what shows you the scale changing instead of hiding it.
-        # They still drift with the history, as the original's did.
+        # Vertical lines are spaced by samples rather than by pixels and are
+        # drawn through the same axis as the data, so they compress towards
+        # the left exactly as the readings do. Because the axis is
+        # exponential out there, a fixed number of samples between lines
+        # makes their spacing shrink by a constant ratio - a smooth
+        # accelerating squeeze, not a pattern with pieces missing. They stop
+        # once they would be closer together than GRID_MIN_GAP, which is a
+        # clean edge rather than a gap. And they still drift left with the
+        # history, as the original's did.
         step = max(1, int(round(self.linear_samples() * 2.0 / max(1, cols))))
         age = self._phase % step
         previous = w + 99.0
-        guard = 0
-        while guard < 512:
-            guard += 1
-            if age > self.capacity - 1:
-                break
+        while age <= self.capacity - 1:
             x = self.sample_x((self.capacity - 1) - age, w)
-            if x < 0.5:
+            if x < 0.5 or previous - x < GRID_MIN_GAP:
                 break
-            if previous - x < GRID_MIN_GAP:
-                # Rather than stop ruling the compressed end, halve how
-                # often the lines fall. The grid thins out instead of
-                # closing up into a solid block.
-                step *= 2
-                age += step
-                continue
             cr.move_to(round(x) + 0.5, 0)
             cr.line_to(round(x) + 0.5, h)
             previous = x

@@ -23,6 +23,12 @@ CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
 _DEAD = (psutil.NoSuchProcess, psutil.ZombieProcess, ProcessLookupError, FileNotFoundError)
 
+# How often the expensive, slow-moving readings are actually taken, whatever
+# the refresh speed is set to. Nothing on a desktop changes temperature in a
+# tenth of a second.
+TEMP_INTERVAL = 2.0
+GPU_INTERVAL = 0.5
+
 
 @dataclass(slots=True)
 class ProcInfo:
@@ -429,6 +435,16 @@ class SystemSampler:
         self._zswap = _zswap_params()
         self._drives = DriveSampler()
         self._gpus = GpuSampler()
+        # Two of the readings here cost far more than the rest put together
+        # and move far more slowly: reading every hwmon sensor on the box is
+        # about 39 ms, and the walk of /proc/*/fdinfo the GPU needs where
+        # there is no driver counter is about 22 ms. Refreshing those on
+        # every tick made the whole pass too slow to run at Ultra speed, so
+        # they keep their own pace and the last answer stands in between.
+        self._temps = {}
+        self._temps_at = 0.0
+        self._gpu_cache = []
+        self._gpu_at = 0.0
         psutil.cpu_percent(None, percpu=True)
         psutil.cpu_percent(None)
         psutil.cpu_times_percent(None, percpu=True)
@@ -438,6 +454,13 @@ class SystemSampler:
         s = SystemSnapshot()
         s.ts = time.monotonic()
         s.interval = interval
+
+        # At most one of the two expensive refreshes per tick. Both falling
+        # on the same tick was the only thing that pushed a cycle near the
+        # 100 ms an Ultra tick has to fit in; the temperatures are the less
+        # urgent of the two, so they give way and go on the next one.
+        gpu_due = (s.ts - self._gpu_at >= GPU_INTERVAL) or gpu_per_process
+        temps_due = (s.ts - self._temps_at >= TEMP_INTERVAL) and not gpu_due
         s.cpu_cores = psutil.cpu_percent(None, percpu=True)
         s.cpu_total = sum(s.cpu_cores) / len(s.cpu_cores) if s.cpu_cores else 0.0
 
@@ -488,11 +511,14 @@ class SystemSampler:
         s.nthreads = nthreads
         s.uptime = time.time() - psutil.boot_time()
 
-        try:
-            s.temps = {k: [(x.label or k, x.current) for x in v]
-                       for k, v in psutil.sensors_temperatures().items()}
-        except (AttributeError, OSError):
-            s.temps = {}
+        if temps_due:
+            self._temps_at = s.ts
+            try:
+                self._temps = {k: [(x.label or k, x.current) for x in v]
+                               for k, v in psutil.sensors_temperatures().items()}
+            except (AttributeError, OSError):
+                self._temps = {}
+        s.temps = self._temps
 
         # --- network -------------------------------------------------------
         counters = psutil.net_io_counters(pernic=True)
@@ -539,7 +565,12 @@ class SystemSampler:
         self._disk = d or self._disk
 
         s.drives = self._drives.sample(interval)
-        s.gpus = self._gpus.sample(per_process=gpu_per_process)
+        # The GPU sampler works out its own elapsed time, so leaving it
+        # alone for a tick costs nothing but freshness.
+        if gpu_due:
+            self._gpu_at = s.ts
+            self._gpu_cache = self._gpus.sample(per_process=gpu_per_process)
+        s.gpus = self._gpu_cache
 
         return s
 
@@ -613,6 +644,13 @@ class Sampler(threading.Thread):
             except Exception as exc:  # a bad /proc read must not kill the thread
                 import traceback
                 traceback.print_exception(exc)
-            wait = self._interval if not self._paused else 3600.0
+            # Wait out what is left of the interval rather than the whole of
+            # it: sampling itself takes tens of milliseconds, and adding that
+            # on top of every wait made each speed run slower than it said.
+            # Ultra asks for ten samples a second and only managed seven.
+            if self._paused:
+                wait = 3600.0
+            else:
+                wait = max(0.0, self._interval - (time.monotonic() - now))
             self._wake.wait(wait)
             self._wake.clear()

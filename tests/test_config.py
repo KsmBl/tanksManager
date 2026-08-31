@@ -106,6 +106,18 @@ def test_saving_drops_a_session_key_an_older_version_left_behind(config_file):
     assert written["tab"] == 3
 
 
+def test_ultra_is_five_times_high(config_file):
+    assert config.UPDATE_SPEEDS["ultra"] == config.UPDATE_SPEEDS["high"] / 5.0
+
+
+def test_update_interval_falls_back_on_a_name_it_does_not_know(config_file):
+    # The speed is a string in a hand-editable file; an unknown one used to
+    # reach a dict lookup and take the window down with a KeyError.
+    assert config.update_interval("turbo") == config.UPDATE_SPEEDS["normal"]
+    assert config.update_interval(None) == config.UPDATE_SPEEDS["normal"]
+    assert config.update_interval("ultra") == 0.1
+
+
 def test_corrupt_json_leaves_every_default_standing(config_file):
     config_file.write_text("{not json at all")
 

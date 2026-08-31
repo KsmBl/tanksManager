@@ -141,10 +141,13 @@ in the same box**.
 Two things follow from it:
 
 * **Vertical grid lines are drawn through the same axis**, at a fixed number
-  of samples rather than a fixed number of pixels, so they crowd together
-  towards the left exactly as the readings do. That is what shows you the
-  scale changing instead of hiding it. When they would close up into a solid
-  block the interval doubles, so the grid thins out rather than filling in.
+  of samples rather than a fixed number of pixels, so they compress towards
+  the left exactly as the readings do. That is what shows you the scale
+  changing instead of hiding it. Because the axis is exponential out there,
+  a fixed number of samples between lines makes their spacing shrink by a
+  constant ratio — a smooth accelerating squeeze rather than a pattern with
+  pieces missing — and they stop once they would be closer together than
+  three pixels.
 * **Where several readings share a pixel, the column is their mean.** Drawing
   them all would be a smear that flickers as it scrolls; averaging turns an
   old spike into part of the trend it belonged to, which is the point of
@@ -266,8 +269,33 @@ always themed; only the graph plates are deliberately retro.
 * A non-linear time axis: the recent half at full resolution, older readings
   folded into the left half, so a graph holds roughly seven times the history
   in the same box
+* An **Ultra** refresh speed, ten samples a second
 * Tank Mode, for when a chart deserves it — damage scrolls away with the data,
   off at every start, never saved
+
+## Refresh speed
+
+`View ▸ Update Speed` offers **Ultra**, High, Normal, Low and Paused —
+ten, two, one and a quarter samples a second, and nothing at all.
+
+Ultra reads every process ten times a second, which costs about half of one
+core on a machine with 300 processes, and shrinks what a graph covers to
+under a minute. It is there for watching something short and sharp, not for
+leaving on.
+
+Two things had to change to make it real:
+
+* **The two expensive readings now keep their own pace.** Reading every hwmon
+  sensor takes about 39 ms and the walk of `/proc/*/fdinfo` the GPU needs
+  where no driver counter exists takes about 22 ms — together, more than an
+  Ultra tick has to spend. Neither moves meaningfully in a tenth of a second,
+  so temperatures refresh every two seconds and the GPU scan twice a second,
+  never both on the same tick. A system pass went from 69 ms to 3 ms, which
+  every speed benefits from.
+* **The worker waits out what is left of the interval**, not the whole of it.
+  It used to sample and *then* wait the full period, so every speed ran slow:
+  High was 1.80 Hz rather than 2, and Ultra managed 6.8 Hz rather than 10.
+  All of them now hit their target.
 
 ## Keyboard
 

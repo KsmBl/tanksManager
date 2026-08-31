@@ -12,7 +12,7 @@ CONFIG_DIR = os.path.join(
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULTS = {
-    "update_speed": "normal",          # high | normal | low | paused
+    "update_speed": "normal",          # ultra | high | normal | low | paused
     "tab": 1,                          # tab index restored on start
     "always_on_top": False,
     "minimise_on_use": False,
@@ -97,8 +97,14 @@ class Config(dict):
 
 
 UPDATE_SPEEDS = {
+    "ultra": 0.1,                  # five times High
     "high": 0.5,
     "normal": 1.0,
     "low": 4.0,
     "paused": 3600.0,
 }
+
+
+def update_interval(key) -> float:
+    """Seconds between samples, tolerating a name that is not one of ours."""
+    return UPDATE_SPEEDS.get(key, UPDATE_SPEEDS["normal"])

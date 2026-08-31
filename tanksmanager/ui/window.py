@@ -10,7 +10,7 @@ from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 from .. import APP_ID, APP_NAME
 from ..backend import actions
-from ..backend.config import UPDATE_SPEEDS
+from ..backend.config import update_interval
 from ..backend.sampler import Sampler
 from ..backend.units import bytes_h
 from . import dialogs
@@ -82,7 +82,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.proc_tab.connect("status-message", lambda _t, msg: self.set_status(msg))
 
-        self.sampler = Sampler(self._deliver, UPDATE_SPEEDS[cfg["update_speed"]])
+        self.sampler = Sampler(self._deliver, update_interval(cfg["update_speed"]))
         self.proc_tab.sync_sampler()        # the tab was built before the worker
         self.sampler.start()
 
@@ -159,13 +159,23 @@ class MainWindow(Gtk.ApplicationWindow):
         speed_item = Gtk.MenuItem(label="_Update Speed", use_underline=True)
         speed_menu = Gtk.Menu()
         group = []
-        for key, label in (("high", "_High"), ("normal", "_Normal"),
-                           ("low", "_Low"), ("paused", "_Paused")):
+        speed_tips = {
+            "ultra": "Ten samples a second, five times High. Reading every "
+                     "process that often costs about half of one core, and "
+                     "the graphs then cover under a minute.",
+            "paused": "Nothing is sampled until you pick another speed or "
+                      "press F5.",
+        }
+        for key, label in (("ultra", "_Ultra"), ("high", "_High"),
+                           ("normal", "_Normal"), ("low", "_Low"),
+                           ("paused", "_Paused")):
             item = Gtk.RadioMenuItem(label=label, use_underline=True,
                                      group=group[0] if group else None)
             group.append(item)
             if self.cfg["update_speed"] == key:
                 item.set_active(True)
+            if key in speed_tips:
+                item.set_tooltip_text(speed_tips[key])
             item.connect("toggled", self._on_speed, key)
             speed_menu.append(item)
         speed_item.set_submenu(speed_menu)
@@ -278,7 +288,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if not item.get_active():
             return
         self.cfg["update_speed"] = key
-        self.sampler.set_interval(UPDATE_SPEEDS[key])
+        self.sampler.set_interval(update_interval(key))
         self.sampler.set_paused(key == "paused")
         self.status_left.set_text(self._idle_status())
 
