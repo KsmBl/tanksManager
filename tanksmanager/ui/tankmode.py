@@ -141,9 +141,14 @@ class Crater:
     with the data it destroyed.
     """
 
-    def __init__(self, index, x, y, now, radius, offset=0.0):
+    def __init__(self, index, x, y, now, radius, offset=0.0, half_samples=1.0):
         self.index = index
         self.x, self.y = x, y
+        # What the round destroyed, in readings. That never changes; how
+        # many pixels it takes up does, because the axis packs older
+        # samples closer together the further left they get.
+        self.half_samples = half_samples
+        self.rx = radius
         # How far below the trace the round buried itself. The crater is
         # damage to the line, so it is re-hung off the line every frame at
         # this offset rather than pinned to the pixel it was made on.
@@ -174,9 +179,9 @@ class Crater:
         first = True
         pts = []
         for angle, jitter in self.rim:
-            r = self.radius * jitter * scale
-            pts.append((self.x + math.cos(angle) * r,
-                        self.y + math.sin(angle) * r * 0.52))
+            j = jitter * scale
+            pts.append((self.x + math.cos(angle) * self.rx * j,
+                        self.y + math.sin(angle) * self.radius * j * 0.52))
         # Close the ring smoothly through the midpoints of each edge, which
         # keeps the outline ragged without turning it into a starburst.
         n = len(pts)
@@ -317,12 +322,7 @@ class Battlefield:
         """
         if self.geometry is None:
             return []
-        out = []
-        for crater in self.craters:
-            half = self.geometry.samples_for(crater.radius * 0.82)
-            if half > 0.0:
-                out.append((crater.index, half))
-        return out
+        return [(c.index, c.half_samples) for c in self.craters]
 
     # -- firing -------------------------------------------------------------
     def tank_position(self, w, h):
@@ -353,11 +353,13 @@ class Battlefield:
         index = (self.geometry.to_index(shell.x1)
                  if self.geometry is not None else 0.0)
         offset = 0.0
+        half_samples = 1.0
         if self.geometry is not None:
             offset = shell.y1 - self.geometry.trace_y(index)
+            half_samples = self.geometry.samples_for(radius * 0.82, index)
         self.blasts.append(Blast(shell.x1, shell.y1, now, radius))
         self.craters.append(Crater(index, shell.x1, shell.y1, now, radius,
-                                   offset))
+                                   offset, half_samples))
         # The crater goes where the round landed; the fire goes on the line,
         # because a burning chart is the point of the exercise.
         self.fires.append(Fire(index, shell.x1, shell.y1, now, radius * 2.1))
@@ -401,6 +403,14 @@ class Battlefield:
             crater.x = self.geometry.to_x(crater.index)
             crater.y = min(h - 1.0,
                            self.geometry.trace_y(crater.index) + crater.offset)
+            # Narrows as it drifts into the compressed half, so the scar
+            # keeps covering the readings it actually destroyed.
+            crater.rx = min(crater.radius,
+                            self.geometry.pixels_for(crater.half_samples,
+                                                     crater.index) / 0.82)
+        # Fires are not scaled to the axis: they burn out in fifteen seconds,
+        # which is nowhere near long enough to drift out of the half of the
+        # plate that is drawn at full resolution.
         for fire in self.fires:
             fire.x = self.geometry.to_x(fire.index)
             # Ride the line, so a burning stretch of chart stays on the
@@ -418,17 +428,24 @@ class Battlefield:
             return
         heat = max(0.0, 1.0 - age / SMOULDER_TIME)
 
-        # Scorching sprayed outwards, under the hole itself.
+        # Everything soft about the scar is drawn under one transform that
+        # squeezes it to the width the damage currently occupies. Fills take
+        # a non-uniform scale without complaint; the stroked rim below does
+        # not, so that one is built at explicit width and height instead.
+        squeeze = crater.rx / max(1e-6, crater.radius)
+
+        # Scorching sprayed outwards, under the scar itself.
         cr.save()
+        cr.translate(crater.x, crater.y)
+        cr.scale(squeeze, 1.0)
         for angle, reach, weight in crater.scorch:
             r = crater.radius * reach
-            grad = cairo.RadialGradient(crater.x, crater.y, 0,
-                                        crater.x, crater.y, r)
+            grad = cairo.RadialGradient(0, 0, 0, 0, 0, r)
             grad.add_color_stop_rgba(0.0, 0.05, 0.03, 0.02, 0.55 * fade * weight)
             grad.add_color_stop_rgba(1.0, 0.05, 0.03, 0.02, 0.0)
             cr.set_source(grad)
-            cr.move_to(crater.x, crater.y)
-            cr.arc(crater.x, crater.y, r, angle - 0.42, angle + 0.42)
+            cr.move_to(0, 0)
+            cr.arc(0, 0, r, angle - 0.42, angle + 0.42)
             cr.close_path()
             cr.fill()
         cr.restore()
@@ -439,7 +456,7 @@ class Battlefield:
         # showing through the middle of the scar.
         cr.save()
         cr.translate(crater.x, crater.y)
-        cr.scale(1.0, 0.52)
+        cr.scale(squeeze, 0.52)
         grad = cairo.RadialGradient(0, 0, 0, 0, 0, crater.radius * 1.25)
         grad.add_color_stop_rgba(0.0, 0.03, 0.02, 0.01, 0.92 * fade)
         grad.add_color_stop_rgba(0.70, 0.03, 0.02, 0.01, 0.80 * fade)
@@ -460,7 +477,7 @@ class Battlefield:
         # that did not land far, which is what sells it as a hole rather
         # than a smudge.
         for angle, reach, weight in crater.scorch[:5]:
-            cx = crater.x + math.cos(angle) * crater.radius * (0.9 + reach * 0.12)
+            cx = crater.x + math.cos(angle) * crater.rx * (0.9 + reach * 0.12)
             cy = crater.y + math.sin(angle) * crater.radius * 0.55
             cr.set_source_rgba(0.10, 0.08, 0.05, 0.8 * fade)
             cr.arc(cx, cy, 1.3 + weight * 1.4, 0, math.tau)
@@ -470,8 +487,8 @@ class Battlefield:
             cr.save()
             cr.set_operator(cairo.OPERATOR_ADD)
             crater.path(cr, 1.06)
-            grad = cairo.RadialGradient(crater.x, crater.y, crater.radius * 0.35,
-                                        crater.x, crater.y, crater.radius * 1.25)
+            grad = cairo.RadialGradient(crater.x, crater.y, crater.rx * 0.35,
+                                        crater.x, crater.y, crater.rx * 1.25)
             grad.add_color_stop_rgba(0.0, *EMBER, 0.0)
             grad.add_color_stop_rgba(0.75, *EMBER, 0.42 * heat * fade)
             grad.add_color_stop_rgba(1.0, *EMBER, 0.0)
@@ -480,7 +497,7 @@ class Battlefield:
             # Individual coals winking in the bottom of the hole.
             for angle, dist, phase in crater.embers:
                 pulse = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(now * 6.0 + phase))
-                ex = crater.x + math.cos(angle) * crater.radius * dist
+                ex = crater.x + math.cos(angle) * crater.rx * dist
                 ey = crater.y + math.sin(angle) * crater.radius * dist * 0.7
                 cr.set_source_rgba(*FLAME_MID, 0.9 * heat * pulse * fade)
                 cr.arc(ex, ey, 1.1, 0, math.tau)

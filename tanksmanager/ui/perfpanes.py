@@ -166,7 +166,7 @@ class CpuPane(Pane):
         meter_box.pack_start(self.meters, False, False, 0)
         meter_box.pack_start(self.total_label, False, False, 0)
 
-        self.history = HistoryGraph(capacity=150, height=150, classic=classic)
+        self.history = HistoryGraph(capacity=520, height=150, classic=classic)
         self.cores = CoreGrid(NPROC, classic=classic)
         self.view = Gtk.Stack()
         self.view.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -249,7 +249,7 @@ class MemoryPane(Pane):
         self._zram_scale = AutoScale(64 << 20)
 
         self.mem_meter = Meter(classic=classic, width=54, height=88)
-        self.mem_history = HistoryGraph(capacity=150, height=88, classic=classic,
+        self.mem_history = HistoryGraph(capacity=520, height=88, classic=classic,
                                         classic_series=MEM_COLOURS)
         self.register(self.mem_meter, self.mem_history)
         mem_row, self.mem_legend = self._row("Memory",
@@ -258,7 +258,7 @@ class MemoryPane(Pane):
         self.body.pack_start(mem_row, False, False, 0)
 
         self.swap_meter = Meter(classic=classic, width=54, height=76)
-        self.swap_history = HistoryGraph(capacity=150, height=76, series=2,
+        self.swap_history = HistoryGraph(capacity=520, height=76, series=2,
                                          classic=classic, stacked=True,
                                          classic_series=SWAP_COLOURS)
         self.register(self.swap_meter, self.swap_history)
@@ -269,7 +269,7 @@ class MemoryPane(Pane):
         self.body.pack_start(self.swap_row, False, False, 0)
 
         self.zram_meter = Meter(classic=classic, width=54, height=76)
-        self.zram_history = HistoryGraph(capacity=150, height=76, series=2,
+        self.zram_history = HistoryGraph(capacity=520, height=76, series=2,
                                          classic=classic,
                                          classic_series=ZRAM_COLOURS)
         self.register(self.zram_meter, self.zram_history)
@@ -421,7 +421,7 @@ class NetPane(Pane):
         classic = bool(cfg["classic_graphs"])
         self._scale = AutoScale(64 * 1024)
 
-        self.history = HistoryGraph(capacity=150, height=170, series=2,
+        self.history = HistoryGraph(capacity=520, height=170, series=2,
                                     classic=classic, classic_series=NET_COLOURS)
         self.register(self.history)
         self.legend_label = self.legend()
@@ -473,9 +473,9 @@ class DiskPane(Pane):
         self._scale = AutoScale(1 << 20)
         self._mounts = None
 
-        self.active = HistoryGraph(capacity=150, height=110, classic=classic,
+        self.active = HistoryGraph(capacity=520, height=110, classic=classic,
                                    classic_series=DISK_COLOURS)
-        self.transfer = HistoryGraph(capacity=150, height=110, series=2,
+        self.transfer = HistoryGraph(capacity=520, height=110, series=2,
                                      classic=classic, classic_series=XFER_COLOURS)
         self.register(self.active, self.transfer)
         self.active_legend = self.legend()
@@ -570,7 +570,7 @@ class GpuPane(Pane):
         self._engine_names = None
         self._engine_graphs = {}
 
-        self.history = HistoryGraph(capacity=150, height=150, classic=classic,
+        self.history = HistoryGraph(capacity=520, height=150, classic=classic,
                                     classic_series=GPU_COLOURS)
         self.register(self.history)
         self.legend_label = self.legend()
@@ -644,7 +644,7 @@ class GpuPane(Pane):
         classic = bool(self.cfg["classic_graphs"])
         columns = min(4, max(1, len(names)))
         for index, name in enumerate(names):
-            graph = HistoryGraph(capacity=90, height=56, classic=classic,
+            graph = HistoryGraph(capacity=310, height=56, classic=classic,
                                  grid=(6, 4), classic_series=GPU_COLOURS)
             label = Gtk.Label(label=name, xalign=0.0)
             label.get_style_context().add_class("dim-label")

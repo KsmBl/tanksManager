@@ -40,6 +40,15 @@ CHAR = (0.34, 0.11, 0.03)           # burnt ends of a trace cut by Tank Mode
 SEGMENT = 2                          # lit bar height, in pixels
 SEGMENT_GAP = 1
 
+# The history graphs do not give every second the same width. The newest
+# samples fill the right half at full resolution; older ones are folded into
+# the left half by an exponential that starts at exactly the same scale and
+# tightens from there, so the join is invisible and a graph can hold seven
+# times the history in the same box. SQUASH_RATIO is how many times more
+# samples the plate holds than the linear half alone.
+SQUASH_RATIO = 7.0
+GRID_MIN_GAP = 9.0                   # closest two vertical rules may sit
+
 
 def grid_shape(n):
     """Lay n cells out wider than tall, the way Task Manager did."""
@@ -125,19 +134,34 @@ class _Geometry:
     def __init__(self, graph):
         self.graph = graph
 
-    def _dx(self):
-        alloc = self.graph.get_allocation()
-        n = max(2, self.graph.capacity)
-        return max(1e-6, alloc.width / (n - 1))
+    def _w(self):
+        return max(1, self.graph.get_allocation().width)
 
     def to_x(self, index):
-        return index * self._dx()
+        return self.graph.sample_x(index, self._w())
 
     def to_index(self, x):
-        return x / self._dx()
+        return self.graph.x_sample(x, self._w())
 
-    def samples_for(self, pixels):
-        return pixels / self._dx()
+    def samples_for(self, pixels, at_index):
+        """How many samples a pixel radius covers, here and now.
+
+        The axis is not linear, so this is a different answer at the two
+        ends of the plate - which is the whole point: a crater is recorded
+        as the readings it destroyed, and those stay destroyed however
+        tightly they are packed later on.
+        """
+        w = self._w()
+        x = self.to_x(at_index)
+        lo = self.to_index(max(0.5, x - pixels))
+        hi = self.to_index(min(float(w), x + pixels))
+        return max(0.5, (hi - lo) * 0.5)
+
+    def pixels_for(self, half_samples, at_index):
+        """And back again: how wide that damage is on screen right now."""
+        a = self.to_x(at_index - half_samples)
+        b = self.to_x(at_index + half_samples)
+        return max(1.0, (b - a) * 0.5)
 
     def trace_y(self, index):
         """Pixel y of the topmost series at a sample position."""
@@ -159,12 +183,18 @@ class HistoryGraph(Gtk.DrawingArea):
     """
 
     def __init__(self, capacity=120, series=1, height=90, classic=False,
-                 grid=(12, 6), stacked=False, classic_series=None):
+                 grid=(12, 6), stacked=False, classic_series=None,
+                 squash=True):
         super().__init__()
         self.capacity = capacity
         self.classic = classic
         self.stacked = stacked
         self.grid_cells = grid
+        # Whether older samples are compressed into the left half. Off for
+        # the card sparklines, which are too small for the extra history to
+        # be worth anything.
+        self.squash = squash
+        self._axis = None               # cached (width, capacity, [x per index])
         # Optional per-series colour override, used for the red/green split.
         self.classic_series = classic_series
         self._data = [deque([0.0] * capacity, maxlen=capacity) for _ in range(series)]
@@ -196,6 +226,93 @@ class HistoryGraph(Gtk.DrawingArea):
         self._battlefield.fire_at(event.x, event.y, alloc.width, alloc.height)
         return True
 
+    # -- the time axis ------------------------------------------------------
+    def linear_samples(self):
+        """How many of the newest samples get the right half to themselves."""
+        return max(2.0, self.capacity / SQUASH_RATIO)
+
+    def sample_x(self, index, w):
+        """Pixel x of a sample. Index 0 is the oldest, capacity-1 the newest.
+
+        The newest `lin` samples run linearly from the middle to the right
+        edge. Beyond that the position decays exponentially with the same
+        slope it had at the join, which is what makes the change of scale
+        impossible to see even though the far left is holding six times as
+        much history as the near right.
+        """
+        n = self.capacity
+        age = (n - 1) - index
+        if not self.squash or n < 8:
+            return w - age * (w / max(1.0, n - 1.0))
+        half = w * 0.5
+        lin = self.linear_samples()
+        if age <= lin:
+            return w - age * (half / lin)
+        return half * math.exp(1.0 - age / lin)
+
+    def x_sample(self, x, w):
+        """The inverse: which sample sits under a pixel."""
+        n = self.capacity
+        if not self.squash or n < 8:
+            return (n - 1) - (w - x) / max(1e-6, w / max(1.0, n - 1.0))
+        half = w * 0.5
+        lin = self.linear_samples()
+        if x >= half:
+            age = (w - x) * lin / half
+        else:
+            # x = half * exp(1 - age/lin), so age = lin * (1 - ln(x/half)).
+            age = lin * (1.0 - math.log(max(x, 1e-6) / half))
+        return (n - 1) - age
+
+    def positions(self, w):
+        """x for every sample index, built once per width."""
+        n = self.capacity
+        if self._axis is not None and self._axis[0] == w and self._axis[1] == n:
+            return self._axis[2]
+        xs = [self.sample_x(i, w) for i in range(n)]
+        self._axis = (w, n, xs)
+        return xs
+
+    @staticmethod
+    def _damage_mask(n, holes):
+        """One flag per sample: was this reading blown off the plate?"""
+        gone = bytearray(n)
+        for centre, half in holes:
+            lo = max(0, int(math.floor(centre - half)))
+            hi = min(n - 1, int(math.ceil(centre + half)))
+            for i in range(lo, hi + 1):
+                gone[i] = 1
+        return gone
+
+    def _columns(self, xs, outlines, gone, n):
+        """Collapse the samples that land on one pixel into a single point.
+
+        Deep in the compressed half a column can cover dozens of readings.
+        Drawing them all would be a smear that flickers as it scrolls, so a
+        column carries the mean of what fell into it - which is what turns
+        an old spike into part of the trend it belonged to rather than into
+        noise. Returns (x, [value per series], damaged).
+        """
+        cols = []
+        i = 0
+        while i < n:
+            bucket = int(xs[i])
+            j = i + 1
+            while j < n and int(xs[j]) == bucket:
+                j += 1
+            span = j - i
+            if span == 1:
+                cols.append((xs[i], [o[i] for o in outlines], bool(gone[i])))
+            else:
+                inv = 1.0 / span
+                cols.append((
+                    (xs[i] + xs[j - 1]) * 0.5,
+                    [sum(o[i:j]) * inv for o in outlines],
+                    sum(gone[i:j]) * 2 >= span,
+                ))
+            i = j
+        return cols
+
     @staticmethod
     def _intact_runs(n, holes):
         """Index ranges of the trace that are still there.
@@ -206,12 +323,7 @@ class HistoryGraph(Gtk.DrawingArea):
         """
         if not holes:
             return [(0, n - 1)]
-        gone = bytearray(n)
-        for centre, half in holes:
-            lo = max(0, int(math.floor(centre - half)))
-            hi = min(n - 1, int(math.ceil(centre + half)))
-            for i in range(lo, hi + 1):
-                gone[i] = 1
+        gone = HistoryGraph._damage_mask(n, holes)
         runs, start = [], None
         for i in range(n):
             if gone[i]:
@@ -278,14 +390,33 @@ class HistoryGraph(Gtk.DrawingArea):
         cols, rows = self.grid_cells
         cr.set_line_width(1.0)
         cr.set_source_rgb(*pal.grid)
-        step_x = w / cols
-        # The grid drifts left with the data, as it did in the original.
-        offset = (self._phase % max(1, int(self.capacity / cols))) * (w / self.capacity)
-        x = -offset
-        while x < w:
+        # Vertical lines mark a fixed number of samples, not a fixed number
+        # of pixels, and are drawn through the same axis as the data. So
+        # they crowd together towards the left exactly as the readings do,
+        # which is what shows you the scale changing instead of hiding it.
+        # They still drift with the history, as the original's did.
+        step = max(1, int(round(self.linear_samples() * 2.0 / max(1, cols))))
+        age = self._phase % step
+        previous = w + 99.0
+        guard = 0
+        while guard < 512:
+            guard += 1
+            if age > self.capacity - 1:
+                break
+            x = self.sample_x((self.capacity - 1) - age, w)
+            if x < 0.5:
+                break
+            if previous - x < GRID_MIN_GAP:
+                # Rather than stop ruling the compressed end, halve how
+                # often the lines fall. The grid thins out instead of
+                # closing up into a solid block.
+                step *= 2
+                age += step
+                continue
             cr.move_to(round(x) + 0.5, 0)
             cr.line_to(round(x) + 0.5, h)
-            x += step_x
+            previous = x
+            age += step
         for i in range(1, rows):
             y = round(h * i / rows) + 0.5
             cr.move_to(0, y)
@@ -293,7 +424,6 @@ class HistoryGraph(Gtk.DrawingArea):
         cr.stroke()
 
         n = self.capacity
-        dx = w / max(1, n - 1)
         solid = pal.classic
 
         # Work out the outline each series is filled to, then paint from the
@@ -313,14 +443,24 @@ class HistoryGraph(Gtk.DrawingArea):
                 order.sort(key=lambda i: outlines[i][-1], reverse=True)
 
         holes = self._battlefield.holes() if self._battlefield is not None else []
-        runs = self._intact_runs(n, holes)
+        xs = self.positions(w)
+        gone = self._damage_mask(n, holes) if holes else bytearray(n)
+        columns = self._columns(xs, outlines, gone, n)
+
+        # One run of adjacent columns per surviving stretch of trace.
+        runs, current = [], None
+        for col in columns:
+            if col[2]:
+                current = None
+                continue
+            if current is None:
+                current = []
+                runs.append(current)
+            current.append(col)
+        runs = [r for r in runs if len(r) > 1]
 
         for index in order:
-            values = outlines[index]
             colour = self._colour(pal, index)
-
-            def y_at(i, _v=values):
-                return h - _v[i] * (h - 1)
 
             # The XP graph was a line on a plate, not a block of colour, so
             # classic mode strokes the trace and leaves the plate showing
@@ -328,12 +468,12 @@ class HistoryGraph(Gtk.DrawingArea):
             # what makes it read as the modern alternative rather than as
             # the same drawing in different colours.
             if not solid:
-                for start, end in runs:
+                for run in runs:
                     cr.new_path()
-                    cr.move_to(start * dx, h)
-                    for i in range(start, end + 1):
-                        cr.line_to(i * dx, y_at(i))
-                    cr.line_to(end * dx, h)
+                    cr.move_to(run[0][0], h)
+                    for x, values, _bad in run:
+                        cr.line_to(x, h - values[index] * (h - 1))
+                    cr.line_to(run[-1][0], h)
                     cr.close_path()
                     cr.set_source_rgba(*colour, pal.fill_alpha)
                     cr.fill()
@@ -341,11 +481,11 @@ class HistoryGraph(Gtk.DrawingArea):
             cr.set_source_rgb(*colour)
             cr.set_line_width(pal.line_width)
             cr.set_line_join(cairo.LINE_JOIN_ROUND)
-            for start, end in runs:
+            for run in runs:
                 cr.new_path()
-                cr.move_to(start * dx, y_at(start))
-                for i in range(start + 1, end + 1):
-                    cr.line_to(i * dx, y_at(i))
+                cr.move_to(run[0][0], h - run[0][1][index] * (h - 1))
+                for x, values, _bad in run[1:]:
+                    cr.line_to(x, h - values[index] * (h - 1))
                 cr.stroke()
 
             # Torn ends where the line was cut, so a break reads as damage
@@ -353,15 +493,15 @@ class HistoryGraph(Gtk.DrawingArea):
             if holes:
                 cr.set_source_rgb(*CHAR)
                 cr.set_line_width(max(1.0, pal.line_width))
-                for start, end in runs:
-                    for edge, direction in ((start, -1), (end, 1)):
-                        if (edge == 0 and direction < 0) or (edge == n - 1
-                                                             and direction > 0):
+                for run in runs:
+                    for col, direction in ((run[0], -1), (run[-1], 1)):
+                        ex = col[0]
+                        if ex <= 1.0 or ex >= w - 1.0:
                             continue
-                        ex, ey = edge * dx, y_at(edge)
+                        ey = h - col[1][index] * (h - 1)
                         cr.new_path()
                         cr.move_to(ex, ey)
-                        cr.line_to(ex + direction * dx * 0.9, ey + 3.5)
+                        cr.line_to(ex + direction * 3.0, ey + 3.5)
                         cr.stroke()
 
         # Keep the highest line for Tank Mode to set its fires on.
@@ -504,7 +644,7 @@ class CoreGrid(Gtk.Grid):
         self.graphs = []
         for i in range(ncores):
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-            graph = HistoryGraph(capacity=90, height=52, classic=classic,
+            graph = HistoryGraph(capacity=310, height=52, classic=classic,
                                  grid=(6, 4), series=2 if stacked else 1,
                                  stacked=stacked, classic_series=classic_series)
             label = Gtk.Label(label=f"CPU {i}", xalign=0.0)

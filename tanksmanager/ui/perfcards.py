@@ -21,6 +21,7 @@ class ResourceCard(Gtk.ListBoxRow):
         self.set_activatable(True)
 
         self.graph = HistoryGraph(capacity=70, height=44, series=series,
+                                  squash=False,
                                   classic=classic, grid=(6, 4), stacked=stacked,
                                   classic_series=classic_series)
         self.graph.set_size_request(78, 44)

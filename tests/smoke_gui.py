@@ -129,6 +129,30 @@ def main():
                 assert sum(end - start for start, end in runs) < target.capacity - 1, (
                     "the trace was drawn straight through the hole")
 
+                # The time axis: the newest half at full resolution, older
+                # readings folded into the left half, and an inverse that
+                # actually inverts - Tank Mode aims through it.
+                width = target.get_allocation().width
+                lin = target.linear_samples()
+                n = target.capacity
+                xs = target.positions(width)
+                assert all(xs[i] <= xs[i + 1] for i in range(n - 1)), (
+                    "the time axis is not monotonic")
+                assert abs(xs[-1] - width) < 0.01, "the newest sample is not at the edge"
+                assert xs[0] < width * 0.02, "the oldest sample is not near the left edge"
+                middle = target.sample_x((n - 1) - lin, width)
+                assert abs(middle - width / 2.0) < 0.01, (
+                    "the linear half does not end at the middle")
+                # Even spacing in the linear half, tightening beyond it.
+                near = xs[-1] - xs[-2]
+                mid = target.sample_x(n - 1 - 10, width) - target.sample_x(n - 1 - 11, width)
+                far = target.sample_x(10, width) - target.sample_x(9, width)
+                assert abs(near - mid) < 0.01, "the recent half is not linear"
+                assert far < near / 4.0, "older samples are not compressed"
+                for probe in (1.0, width * 0.25, width * 0.5, width * 0.9, width - 1.0):
+                    back = target.sample_x(target.x_sample(probe, width), width)
+                    assert abs(back - probe) < 0.5, f"axis does not invert at {probe}"
+
                 window.perf_tab.set_tank_mode(False)
                 assert all(g._battlefield is None for g in graphs)
             except Exception as exc:            # noqa: BLE001 - report it all

@@ -125,6 +125,33 @@ classic palette off swaps in the theme's accent colour and a soft wash under
 the trace, which is the modern alternative rather than the same drawing in
 different colours.
 
+### The time axis is not linear
+
+This is the one place the original is deliberately left behind. XP gave every
+second the same width, which meant a graph could only ever hold as much
+history as it had pixels — about two minutes.
+
+Here the **newest half of the history fills the right half of the plate at
+exactly that resolution**, and everything older is folded into the left half
+by an exponential that starts at the same scale and tightens from there. The
+slope matches at the join, so there is no seam to see; the graph simply gets
+denser the further left you look, and holds around **seven times the history
+in the same box**.
+
+Two things follow from it:
+
+* **Vertical grid lines are drawn through the same axis**, at a fixed number
+  of samples rather than a fixed number of pixels, so they crowd together
+  towards the left exactly as the readings do. That is what shows you the
+  scale changing instead of hiding it. When they would close up into a solid
+  block the interval doubles, so the grid thins out rather than filling in.
+* **Where several readings share a pixel, the column is their mean.** Drawing
+  them all would be a smear that flickers as it scrolls; averaging turns an
+  old spike into part of the trend it belonged to, which is the point of
+  looking that far back.
+
+The card sparklines stay linear — at 78 pixels wide there is nothing to gain.
+
 * **One meter per logical processor.** A multiprocessor XP box drew a separate
   bar for every CPU, and so does this.
 * **One graph per CPU** by default. `View ▸ CPU History` switches between
@@ -236,6 +263,9 @@ always themed; only the graph plates are deliberately retro.
 * Swap broken down by backing store, zram device statistics and zswap accounting
 * systemd services for both the system manager and your user session
 * Column layout, sort order, window size and options remembered between runs
+* A non-linear time axis: the recent half at full resolution, older readings
+  folded into the left half, so a graph holds roughly seven times the history
+  in the same box
 * Tank Mode, for when a chart deserves it — damage scrolls away with the data,
   off at every start, never saved
 
