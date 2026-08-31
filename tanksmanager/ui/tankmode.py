@@ -7,9 +7,11 @@ a ballistic arc, an airburst of fire and debris, a crater blown clean
 through the graph, and the trace left burning at the point of impact until
 it goes out.
 
-None of it touches the data.  Everything here is painted over the finished
-graph and expires on its own, so a chart that is on fire is still a chart
-you can read.
+Damage is anchored to the samples it landed on, not to a place on the
+screen, so a hole travels left with the data that was under it and finally
+scrolls off the plate like everything else.  The readings themselves are
+never altered - the trace is simply not drawn across a stretch that has been
+blown away.
 
 The whole thing animates from one timer that only runs while something is
 still alight, and stops the moment the last ember dies - a screen full of
@@ -36,7 +38,11 @@ SHOCKWAVE_TIME = 0.42
 DEBRIS_TIME = 1.5
 BURN_TIME = 11.0                    # how long the trace stays alight
 SMOULDER_TIME = 4.0                 # embers cooling in the crater afterwards
-CRATER_LIFE = 45.0                  # craters scab over eventually
+# Craters are not on a timer. They live for exactly as long as the samples
+# they destroyed are still on the plate, and go when those scroll off the
+# left-hand edge - which is the only ending that does not leave a hole in
+# the line healing itself while you watch.
+OFF_PLATE = -6.0                    # sample index at which damage is gone
 
 MAX_CRATERS = 14
 MAX_FIRES = 8
@@ -128,10 +134,20 @@ class Blast:
 
 
 class Crater:
-    """A hole blown through the plate, with a charred rim that cools."""
+    """A hole blown through the chart, with a charred rim that cools.
 
-    def __init__(self, x, y, now, radius):
+    `index` is a position in the sample history, not on the screen: the
+    graph converts it back to an x every frame, so the damage drifts left
+    with the data it destroyed.
+    """
+
+    def __init__(self, index, x, y, now, radius, offset=0.0):
+        self.index = index
         self.x, self.y = x, y
+        # How far below the trace the round buried itself. The crater is
+        # damage to the line, so it is re-hung off the line every frame at
+        # this offset rather than pinned to the pixel it was made on.
+        self.offset = offset
         self.born = now
         self.radius = radius
         rng = random.Random(int(x * 31 + y * 17 + radius))
@@ -152,7 +168,7 @@ class Crater:
         return now - self.born
 
     def dead(self, now):
-        return self.age(now) > CRATER_LIFE
+        return self.index < OFF_PLATE
 
     def path(self, cr, scale=1.0):
         first = True
@@ -160,7 +176,7 @@ class Crater:
         for angle, jitter in self.rim:
             r = self.radius * jitter * scale
             pts.append((self.x + math.cos(angle) * r,
-                        self.y + math.sin(angle) * r * 0.82))
+                        self.y + math.sin(angle) * r * 0.52))
         # Close the ring smoothly through the midpoints of each edge, which
         # keeps the outline ragged without turning it into a starburst.
         n = len(pts)
@@ -179,7 +195,8 @@ class Crater:
 class Fire:
     """The trace, alight. Sits wherever the round landed and burns out."""
 
-    def __init__(self, x, y, now, width):
+    def __init__(self, index, x, y, now, width):
+        self.index = index
         self.x, self.y = x, y
         self.floor = y                  # never climbs above the impact point
         self.born = now
@@ -207,7 +224,8 @@ class Fire:
         return now - self.born
 
     def dead(self, now):
-        return self.age(now) > BURN_TIME + SMOULDER_TIME
+        return (self.age(now) > BURN_TIME + SMOULDER_TIME
+                or self.index < OFF_PLATE)
 
     def intensity(self, now):
         """1 while it rages, easing to 0 as it burns out."""
@@ -223,12 +241,15 @@ class Fire:
 class Battlefield:
     """Everything currently happening to one graph."""
 
-    def __init__(self, widget, trace_y=None):
+    def __init__(self, widget, geometry=None):
         self.widget = widget
-        # Given a pixel x, where the topmost series is drawn right now.  The
-        # fires re-anchor to it every frame, so a burning stretch of chart
-        # rides the line up and down instead of hanging in mid air.
-        self.trace_y = trace_y
+        # The graph, which knows how to convert between a pixel x and a
+        # position in the sample history and can say where the topmost
+        # series is drawn.  Everything anchored here is stored in sample
+        # space and converted back every frame, which is what makes the
+        # damage scroll with the data instead of sitting still while the
+        # chart slides out from under it.
+        self.geometry = geometry
         self.shells = []
         self.blasts = []
         self.craters = []
@@ -275,6 +296,34 @@ class Battlefield:
         self.craters = [c for c in self.craters if not c.dead(now)]
         self.fires = [f for f in self.fires if not f.dead(now)]
 
+    def scroll(self, samples=1):
+        """A new reading arrived: every anchor moves one sample to the left.
+
+        Called from the graph's push(), so damage keeps company with the
+        data it was done to, and leaves the plate when that data does.
+        """
+        for item in self.craters:
+            item.index -= samples
+        for item in self.fires:
+            item.index -= samples
+        self.craters = [c for c in self.craters if c.index >= OFF_PLATE]
+        self.fires = [f for f in self.fires if f.index >= OFF_PLATE]
+
+    def holes(self):
+        """(centre index, half width in samples) for every live crater.
+
+        The graph breaks its trace across these, which is what puts an
+        actual hole in the line rather than a scorch mark over it.
+        """
+        if self.geometry is None:
+            return []
+        out = []
+        for crater in self.craters:
+            half = self.geometry.samples_for(crater.radius * 0.82)
+            if half > 0.0:
+                out.append((crater.index, half))
+        return out
+
     # -- firing -------------------------------------------------------------
     def tank_position(self, w, h):
         """Where the tank sits, and where its muzzle is when level."""
@@ -285,8 +334,8 @@ class Battlefield:
         # The chart is the ground. A round aimed at empty sky still comes
         # down on the terrain below it, which is what keeps every crater
         # bitten out of the graph instead of hanging in the black.
-        if self.trace_y is not None:
-            ty = max(ty, self.trace_y(tx))
+        if self.geometry is not None:
+            ty = max(ty, self.geometry.trace_y(self.geometry.to_index(tx)))
         ty = min(ty, h - 2.0)
         x0, y0 = self.tank_position(w, h)
         self.aim = (tx, ty)
@@ -300,12 +349,18 @@ class Battlefield:
         self._start()
 
     def _impact(self, shell, now, w, h):
-        radius = max(11.0, min(30.0, h * 0.26))
+        radius = max(10.0, min(24.0, h * 0.21))
+        index = (self.geometry.to_index(shell.x1)
+                 if self.geometry is not None else 0.0)
+        offset = 0.0
+        if self.geometry is not None:
+            offset = shell.y1 - self.geometry.trace_y(index)
         self.blasts.append(Blast(shell.x1, shell.y1, now, radius))
-        self.craters.append(Crater(shell.x1, shell.y1, now, radius))
+        self.craters.append(Crater(index, shell.x1, shell.y1, now, radius,
+                                   offset))
         # The crater goes where the round landed; the fire goes on the line,
         # because a burning chart is the point of the exercise.
-        self.fires.append(Fire(shell.x1, shell.y1, now, radius * 2.1))
+        self.fires.append(Fire(index, shell.x1, shell.y1, now, radius * 2.1))
         del self.craters[:-MAX_CRATERS]
         del self.fires[:-MAX_FIRES]
 
@@ -314,6 +369,7 @@ class Battlefield:
         """Craters and scorching: painted over the finished graph so the hole
         goes through the data, not behind it."""
         now = now or time.monotonic()
+        self._place(h)
         for crater in self.craters:
             self._draw_crater(cr, crater, now)
 
@@ -324,10 +380,6 @@ class Battlefield:
         cr.rectangle(0, 0, w, h)
         cr.clip()
         for fire in self.fires:
-            if self.trace_y is not None:
-                # Ride the line as the data scrolls underneath, so a burning
-                # stretch of chart stays on the chart.
-                fire.y = max(self.trace_y(fire.x), fire.floor)
             self._draw_fire(cr, fire, now)
         for blast in self.blasts:
             self._draw_blast(cr, blast, now)
@@ -341,11 +393,27 @@ class Battlefield:
         self._draw_tank(cr, w, h, now)
         cr.restore()
 
+    def _place(self, h):
+        """Turn every sample anchor back into pixels for this frame."""
+        if self.geometry is None:
+            return
+        for crater in self.craters:
+            crater.x = self.geometry.to_x(crater.index)
+            crater.y = min(h - 1.0,
+                           self.geometry.trace_y(crater.index) + crater.offset)
+        for fire in self.fires:
+            fire.x = self.geometry.to_x(fire.index)
+            # Ride the line, so a burning stretch of chart stays on the
+            # chart as the reading under it rises and falls.
+            fire.y = min(h - 1.0, max(self.geometry.trace_y(fire.index),
+                                      fire.floor))
+
     # -- pieces -------------------------------------------------------------
     def _draw_crater(self, cr, crater, now):
         age = crater.age(now)
-        fade = 1.0 - max(0.0, (age - CRATER_LIFE * 0.6) / (CRATER_LIFE * 0.4))
-        fade = max(0.0, min(1.0, fade))
+        # The only fading left is at the very edge of the plate, so damage
+        # slides off rather than vanishing on the last pixel.
+        fade = max(0.0, min(1.0, crater.index / 4.0))
         if fade <= 0.0:
             return
         heat = max(0.0, 1.0 - age / SMOULDER_TIME)
@@ -365,15 +433,27 @@ class Battlefield:
             cr.fill()
         cr.restore()
 
-        # The hole: black, because the plate below the graph is black.
-        crater.path(cr)
-        cr.set_source_rgba(0.02, 0.02, 0.02, 0.97 * fade)
-        cr.fill_preserve()
+        # The trace is a line on a plate, so there is no mass to punch a
+        # hole through: what is left of a hit is a blast scar around the
+        # break in the line. A faint dark wash under it keeps the grid from
+        # showing through the middle of the scar.
+        cr.save()
+        cr.translate(crater.x, crater.y)
+        cr.scale(1.0, 0.52)
+        grad = cairo.RadialGradient(0, 0, 0, 0, 0, crater.radius * 1.25)
+        grad.add_color_stop_rgba(0.0, 0.03, 0.02, 0.01, 0.92 * fade)
+        grad.add_color_stop_rgba(0.70, 0.03, 0.02, 0.01, 0.80 * fade)
+        grad.add_color_stop_rgba(1.0, 0.03, 0.02, 0.01, 0.0)
+        cr.set_source(grad)
+        cr.arc(0, 0, crater.radius * 1.25, 0, math.tau)
+        cr.fill()
+        cr.restore()
 
         # Charred lip, still glowing while it is fresh.
-        cr.set_line_width(2.4)
-        cr.set_source_rgba(0.22 + 0.62 * heat, 0.09 + 0.22 * heat,
-                           0.05, (0.85 + 0.15 * heat) * fade)
+        crater.path(cr)
+        cr.set_line_width(1.5)
+        cr.set_source_rgba(0.20 + 0.60 * heat, 0.09 + 0.24 * heat,
+                           0.06, (0.34 + 0.52 * heat) * fade)
         cr.stroke()
 
         # Spoil thrown up around the lip: a couple of chunks of the graph

@@ -23,6 +23,10 @@ class TanksManager(Gtk.Application):
                              GLib.OptionArg.STRING, "Open a tab by name "
                              "(applications, processes, performance, "
                              "users, services)", "NAME")
+        self.add_main_option("tank-mode", 0, GLib.OptionFlags.NONE,
+                             GLib.OptionArg.NONE,
+                             "Start with Tank Mode armed (this session only)",
+                             None)
         self.add_main_option("version", ord("v"), GLib.OptionFlags.NONE,
                              GLib.OptionArg.NONE, "Show the version and exit", None)
 
@@ -34,6 +38,12 @@ class TanksManager(Gtk.Application):
         if options.get("version"):
             command_line.print_literal(f"{APP_NAME} {__version__}\n")
             return 0
+        if options.get("tank-mode"):
+            # A session setting, so the flag is the only way to ask for it
+            # up front; it is still never written back to the config file.
+            self.cfg["tank_mode"] = True
+            if self.window is not None:
+                self.window.set_tank_mode(True)
         tab = options.get("tab")
         if tab:
             tab = tab.lower()

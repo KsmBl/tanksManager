@@ -35,6 +35,7 @@ XP_DARK = (0.0, 0.25, 0.0)          # #004000
 XP_GREEN = (0.0, 1.0, 0.0)          # #00FF00
 XP_RED = (1.0, 0.0, 0.0)            # #FF0000
 XP_YELLOW = (1.0, 1.0, 0.0)         # #FFFF00
+CHAR = (0.34, 0.11, 0.03)           # burnt ends of a trace cut by Tank Mode
 
 SEGMENT = 2                          # lit bar height, in pixels
 SEGMENT_GAP = 1
@@ -112,6 +113,43 @@ def _draw_text(cr, x, y, text, colour, size=9.5, widget=None):
     return h
 
 
+class _Geometry:
+    """Translates between pixels and positions in the sample history.
+
+    Tank Mode stores everything it has damaged in sample space so the damage
+    travels with the data; this is the only thing that knows how that maps
+    onto the widget, and it is asked afresh every frame because a resize
+    changes the answer.
+    """
+
+    def __init__(self, graph):
+        self.graph = graph
+
+    def _dx(self):
+        alloc = self.graph.get_allocation()
+        n = max(2, self.graph.capacity)
+        return max(1e-6, alloc.width / (n - 1))
+
+    def to_x(self, index):
+        return index * self._dx()
+
+    def to_index(self, x):
+        return x / self._dx()
+
+    def samples_for(self, pixels):
+        return pixels / self._dx()
+
+    def trace_y(self, index):
+        """Pixel y of the topmost series at a sample position."""
+        alloc = self.graph.get_allocation()
+        h = max(1, alloc.height)
+        outline = self.graph._outline
+        if not outline:
+            return h - 1.0
+        i = max(0, min(len(outline) - 1, int(round(index))))
+        return h - outline[i] * (h - 1)
+
+
 class HistoryGraph(Gtk.DrawingArea):
     """A scrolling history plot - the 'CPU Usage History' box.
 
@@ -141,7 +179,7 @@ class HistoryGraph(Gtk.DrawingArea):
         """Options > Tank Mode. Clicking the plate puts a round through it."""
         if enabled and self._battlefield is None:
             self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            self._battlefield = Battlefield(self, trace_y=self._trace_y)
+            self._battlefield = Battlefield(self, geometry=_Geometry(self))
             self._press = self.connect("button-press-event", self._on_shoot)
             self.set_tooltip_text("Tank Mode: click to fire.")
         elif not enabled and self._battlefield is not None:
@@ -158,16 +196,33 @@ class HistoryGraph(Gtk.DrawingArea):
         self._battlefield.fire_at(event.x, event.y, alloc.width, alloc.height)
         return True
 
-    def _trace_y(self, x):
-        """Pixel y of the topmost series at pixel x, for the fires to sit on."""
-        alloc = self.get_allocation()
-        h = max(1, alloc.height)
-        if not self._outline:
-            return h - 1.0
-        n = len(self._outline)
-        dx = max(1e-6, alloc.width / max(1, n - 1))
-        i = max(0, min(n - 1, int(round(x / dx))))
-        return h - self._outline[i] * (h - 1)
+    @staticmethod
+    def _intact_runs(n, holes):
+        """Index ranges of the trace that are still there.
+
+        A hole is a stretch of the history that was blown away; the line is
+        drawn as one run per surviving stretch, so it ends at the lip of the
+        crater and picks up again on the far side.
+        """
+        if not holes:
+            return [(0, n - 1)]
+        gone = bytearray(n)
+        for centre, half in holes:
+            lo = max(0, int(math.floor(centre - half)))
+            hi = min(n - 1, int(math.ceil(centre + half)))
+            for i in range(lo, hi + 1):
+                gone[i] = 1
+        runs, start = [], None
+        for i in range(n):
+            if gone[i]:
+                if start is not None:
+                    runs.append((start, i - 1))
+                    start = None
+            elif start is None:
+                start = i
+        if start is not None:
+            runs.append((start, n - 1))
+        return [r for r in runs if r[1] > r[0]]
 
     # -- data ---------------------------------------------------------------
     def push(self, *values):
@@ -175,6 +230,10 @@ class HistoryGraph(Gtk.DrawingArea):
             if i < len(self._data):
                 self._data[i].append(max(0.0, min(1.0, float(value))))
         self._phase = (self._phase + 1) % max(1, self.capacity)
+        if self._battlefield is not None:
+            # Damage belongs to the samples it was done to, so it moves left
+            # with them and leaves the plate when they do.
+            self._battlefield.scroll()
         self.queue_draw()
 
     def set_series(self, count, classic_series=None, stacked=None):
@@ -253,32 +312,57 @@ class HistoryGraph(Gtk.DrawingArea):
             if solid and len(outlines) > 1:
                 order.sort(key=lambda i: outlines[i][-1], reverse=True)
 
+        holes = self._battlefield.holes() if self._battlefield is not None else []
+        runs = self._intact_runs(n, holes)
+
         for index in order:
             values = outlines[index]
             colour = self._colour(pal, index)
 
-            cr.new_path()
-            cr.move_to(0, h)
-            for i, value in enumerate(values):
-                cr.line_to(i * dx, h - value * (h - 1))
-            cr.line_to(w, h)
-            cr.close_path()
-            if solid:
-                cr.set_source_rgb(*(c * 0.78 for c in colour))
-            else:
-                cr.set_source_rgba(*colour, pal.fill_alpha)
-            cr.fill()
+            def y_at(i, _v=values):
+                return h - _v[i] * (h - 1)
 
-            cr.new_path()
-            for i, value in enumerate(values):
-                y = h - value * (h - 1)
-                if i == 0:
-                    cr.move_to(0, y)
-                else:
-                    cr.line_to(i * dx, y)
+            # The XP graph was a line on a plate, not a block of colour, so
+            # classic mode strokes the trace and leaves the plate showing
+            # through underneath. Theme mode keeps a soft wash, which is
+            # what makes it read as the modern alternative rather than as
+            # the same drawing in different colours.
+            if not solid:
+                for start, end in runs:
+                    cr.new_path()
+                    cr.move_to(start * dx, h)
+                    for i in range(start, end + 1):
+                        cr.line_to(i * dx, y_at(i))
+                    cr.line_to(end * dx, h)
+                    cr.close_path()
+                    cr.set_source_rgba(*colour, pal.fill_alpha)
+                    cr.fill()
+
             cr.set_source_rgb(*colour)
             cr.set_line_width(pal.line_width)
-            cr.stroke()
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            for start, end in runs:
+                cr.new_path()
+                cr.move_to(start * dx, y_at(start))
+                for i in range(start + 1, end + 1):
+                    cr.line_to(i * dx, y_at(i))
+                cr.stroke()
+
+            # Torn ends where the line was cut, so a break reads as damage
+            # rather than as missing data.
+            if holes:
+                cr.set_source_rgb(*CHAR)
+                cr.set_line_width(max(1.0, pal.line_width))
+                for start, end in runs:
+                    for edge, direction in ((start, -1), (end, 1)):
+                        if (edge == 0 and direction < 0) or (edge == n - 1
+                                                             and direction > 0):
+                            continue
+                        ex, ey = edge * dx, y_at(edge)
+                        cr.new_path()
+                        cr.move_to(ex, ey)
+                        cr.line_to(ex + direction * dx * 0.9, ey + 3.5)
+                        cr.stroke()
 
         # Keep the highest line for Tank Mode to set its fires on.
         if outlines:

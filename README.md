@@ -11,8 +11,9 @@ looks native next to the rest of your desktop on every machine you put it on.
 
 ### Performance — CPU
 
-A segmented meter and a history graph for every logical processor, with kernel
-time in red stacked underneath user time in green.
+A segmented meter and a history graph for every logical processor, drawn as a
+1px trace on the plate the way XP drew it, with kernel time in red beneath the
+green total.
 
 ![Performance tab, CPU card](screenshots/performance-cpu.png)
 
@@ -35,12 +36,23 @@ CPU affinity and a full properties window.
 
 `Options ▸ Tank Mode` parks a tank on the baseline of every graph. Click the
 plate and it lays the barrel onto that point and puts a round through it —
-muzzle flash, a shell on a ballistic arc, an airburst, a crater blown out of
-the chart and the trace left burning until it goes out. It is painted over
-the finished graph and never touches the data.
+muzzle flash, a shell on a ballistic arc, an airburst, and a stretch of the
+trace blown away and left burning until it goes out.
+
+The chart is treated as terrain, so a round aimed at empty sky still comes
+down on the line. The damage belongs to the samples it landed on rather than
+to a place on the plate: holes and scorching travel left with the readings
+that were under them and scroll off the edge with them. The data itself is
+never altered — the trace is simply not drawn across a stretch that has been
+blown away.
 
 It is deliberately not remembered between runs: every session starts with it
-off, however you left it.
+off, however you left it. `tanksmanager --tank-mode` arms it for one session
+without touching the menu.
+
+Below, the CPU history graph with three rounds in it: an old one on the left
+that has burnt out and drifted, one still burning in the middle, and one just
+landed on the right.
 
 ![Tank Mode](screenshots/tank-mode.png)
 
@@ -62,6 +74,7 @@ on X11 window managers other than i3.
 ```sh
 ./run.sh                    # straight from the source tree
 ./run.sh --tab performance  # applications, processes, performance, users, services
+./run.sh --tank-mode        # arm Tank Mode for this session
 ./install.sh                # install into ~/.local (no root needed)
 sudo ./install.sh /usr/local
 ```
@@ -104,12 +117,20 @@ The meters match the original's geometry too: 2px lit bars separated by a 1px
 gap, **every** segment painted — dark green when unlit, not black — and the
 reading printed in green inside the plate under the bar.
 
+The history graphs are drawn the same way: a 1px trace on the plate with the
+grid showing through underneath, not a block of colour with a line on top.
+With `View ▸ Show Kernel Times` on you get exactly what XP gave you — a green
+line for the total and a red one for kernel time beneath it. Turning the
+classic palette off swaps in the theme's accent colour and a soft wash under
+the trace, which is the modern alternative rather than the same drawing in
+different colours.
+
 * **One meter per logical processor.** A multiprocessor XP box drew a separate
   bar for every CPU, and so does this.
 * **One graph per CPU** by default. `View ▸ CPU History` switches between
   *One Graph, All CPUs* and *One Graph Per CPU*, as in the original.
-* **`View ▸ Show Kernel Times`** stacks red kernel time underneath green user
-  time, in both the graphs and the meters.
+* **`View ▸ Show Kernel Times`** draws red kernel time beneath the green
+  total, in both the graphs and the meters.
 
 ## The Performance cards
 
@@ -215,7 +236,8 @@ always themed; only the graph plates are deliberately retro.
 * Swap broken down by backing store, zram device statistics and zswap accounting
 * systemd services for both the system manager and your user session
 * Column layout, sort order, window size and options remembered between runs
-* Tank Mode, for when a chart deserves it — off at every start, never saved
+* Tank Mode, for when a chart deserves it — damage scrolls away with the data,
+  off at every start, never saved
 
 ## Keyboard
 

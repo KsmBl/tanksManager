@@ -12,6 +12,7 @@ of them is reachable from a parser test.
 import os
 import sys
 import tempfile
+import time
 
 # Run as a script, sys.path[0] is tests/ rather than the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -74,19 +75,60 @@ def main():
                 # handler and a frame timer to a live widget, so it is worth
                 # walking end to end rather than trusting the wiring.
                 from tanksmanager.ui.performance import _history_graphs
+
+                # Nothing on a notebook page that is not current gets mapped,
+                # and an unmapped widget is never drawn - so bring the
+                # Performance tab back to the front before shooting at it.
+                window.notebook.set_current_page(2)
+                while Gtk.events_pending():
+                    Gtk.main_iteration()
+
                 window.perf_tab.set_tank_mode(True)
                 graphs = [g for pane in window.perf_tab.panes.values()
                           for g in _history_graphs(pane)]
                 assert graphs, "Tank Mode found no graphs to arm"
                 assert all(g._battlefield is not None for g in graphs)
-                target = graphs[0]
+                # A round is not fired, flown or landed by a widget that
+                # never gets a draw call, and a card holds both the single
+                # history graph and the per-core grid with only one of them
+                # mapped at a time. Pick one that is actually on screen.
+                visible = window.perf_tab.stack.get_visible_child()
+                on_screen = [g for g in _history_graphs(visible)
+                             if g.get_mapped()]
+                assert on_screen, "no graph on the visible card is mapped"
+                target = on_screen[0]
                 alloc = target.get_allocation()
                 target._battlefield.fire_at(alloc.width * 0.6,
                                             alloc.height * 0.4,
                                             alloc.width, alloc.height)
-                for _ in range(40):
+                # The shell needs its flight time before it lands, and the
+                # widget has to actually redraw for the impact to register,
+                # so pump the loop against the clock rather than a count.
+                deadline = time.monotonic() + 1.5
+                while time.monotonic() < deadline:
                     while Gtk.events_pending():
                         Gtk.main_iteration()
+                    time.sleep(0.01)
+
+                # The round should have left damage anchored to the samples
+                # it destroyed, and that damage should walk left as new
+                # readings arrive rather than sitting still on the plate.
+                field = target._battlefield
+                assert field.craters, "the round left no crater"
+                before = field.craters[0].index
+                target.push(0.5)
+                target.push(0.5)
+                assert field.craters[0].index == before - 2, (
+                    "damage did not scroll with the data")
+
+                # And the trace has to be genuinely broken across it.
+                holes = field.holes()
+                assert holes, "a crater produced no hole in the line"
+                runs = target._intact_runs(target.capacity, holes)
+                assert runs, "the whole trace was destroyed"
+                assert sum(end - start for start, end in runs) < target.capacity - 1, (
+                    "the trace was drawn straight through the hole")
+
                 window.perf_tab.set_tank_mode(False)
                 assert all(g._battlefield is None for g in graphs)
             except Exception as exc:            # noqa: BLE001 - report it all

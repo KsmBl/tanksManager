@@ -144,8 +144,9 @@ class MainWindow(Gtk.ApplicationWindow):
         add_check(options, "_Minimise On Use", "minimise_on_use")
         add_check(options, "_Confirm Before Ending A Process", "confirm_kill")
         options.append(Gtk.SeparatorMenuItem())
-        tank = add_check(options, "Tan_k Mode", "tank_mode",
-                         lambda v: self.perf_tab.set_tank_mode(v))
+        self.tank_item = add_check(options, "Tan_k Mode", "tank_mode",
+                                   lambda v: self.perf_tab.set_tank_mode(v))
+        tank = self.tank_item
         tank.set_tooltip_text(
             "Click a graph in the Performance tab to put a round through it.")
         options.append(Gtk.SeparatorMenuItem())
@@ -315,6 +316,10 @@ class MainWindow(Gtk.ApplicationWindow):
         command, as_shell = result
         errors = actions.run_new_task(command, as_shell)
         self.set_status(errors[0] if errors else f"Started {command}.")
+
+    def set_tank_mode(self, enabled):
+        """Used by --tank-mode, including on an already-running instance."""
+        self.tank_item.set_active(bool(enabled))
 
     def export_processes(self):
         """Save the process list as CSV - the same rows, columns and order
