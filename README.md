@@ -49,6 +49,8 @@ the finished graph and never touches the data.
 | Debian/Ubuntu | `python3-gi gir1.2-gtk-3.0 python3-psutil` |
 | Fedora | `python3-gobject gtk3 python3-psutil` |
 
+Python 3.10 or newer.
+
 Optional: `systemctl` for the Services tab, `wmctrl` for the Applications tab
 on X11 window managers other than i3.
 

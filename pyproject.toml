@@ -7,7 +7,7 @@ name = "tanksmanager"
 version = "1.0.0"
 description = "A Windows XP/7 style task manager for Linux desktops, built with GTK 3"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "KsmBL" }]
@@ -21,6 +21,7 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: System :: Monitoring",
     "Topic :: System :: Systems Administration",
 ]
