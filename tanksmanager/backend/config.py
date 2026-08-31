@@ -25,7 +25,7 @@ DEFAULTS = {
     "one_graph_per_cpu": True,     # View > CPU History > One Graph Per CPU
     "show_kernel_times": True,     # red kernel time under green user time
     "confirm_kill": True,
-    "tank_mode": False,            # Options > Tank Mode: shell the charts
+    "tank_mode": False,            # Options > Tank Mode; see SESSION_ONLY
     "window": [760, 560],
     "maximised": False,
     "columns": None,                   # list of visible process column ids
@@ -33,6 +33,15 @@ DEFAULTS = {
     "perf_card": "cpu",            # which Performance card is selected
     "perf_sidebar": 250,           # width of the Performance card strip
 }
+
+# Settings that live for the session and no longer. They are ordinary keys
+# while the app is running, so the menu toggles and the widgets read them the
+# usual way, but they are neither written to disk nor read back from it.
+#
+# Tank Mode is one: it is a gimmick you turn on when you want it, not a
+# preference, and finding the charts already on fire a week later is not what
+# anybody meant by it.
+SESSION_ONLY = {"tank_mode"}
 
 
 def _acceptable(default, value) -> bool:
@@ -70,6 +79,8 @@ class Config(dict):
         if not isinstance(data, dict):
             return
         for key, value in data.items():
+            if key in SESSION_ONLY:
+                continue                    # always starts at its default
             if key in DEFAULTS and _acceptable(DEFAULTS[key], value):
                 self[key] = value
 
@@ -77,8 +88,9 @@ class Config(dict):
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             tmp = CONFIG_FILE + ".tmp"
+            keep = {k: v for k, v in self.items() if k not in SESSION_ONLY}
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(dict(self), fh, indent=2, sort_keys=True)
+                json.dump(keep, fh, indent=2, sort_keys=True)
             os.replace(tmp, CONFIG_FILE)
         except OSError:
             pass

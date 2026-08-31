@@ -39,6 +39,9 @@ muzzle flash, a shell on a ballistic arc, an airburst, a crater blown out of
 the chart and the trace left burning until it goes out. It is painted over
 the finished graph and never touches the data.
 
+It is deliberately not remembered between runs: every session starts with it
+off, however you left it.
+
 ![Tank Mode](screenshots/tank-mode.png)
 
 ## Requirements
@@ -212,7 +215,7 @@ always themed; only the graph plates are deliberately retro.
 * Swap broken down by backing store, zram device statistics and zswap accounting
 * systemd services for both the system manager and your user session
 * Column layout, sort order, window size and options remembered between runs
-* Tank Mode, for when a chart deserves it
+* Tank Mode, for when a chart deserves it — off at every start, never saved
 
 ## Keyboard
 

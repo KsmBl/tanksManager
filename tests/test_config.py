@@ -74,6 +74,38 @@ def test_null_columns_means_use_the_defaults(config_file):
     assert config.Config()["columns"] is None
 
 
+def test_tank_mode_never_reaches_the_file(config_file):
+    # It is a gimmick, not a preference: turning it on must not mean finding
+    # the charts already on fire the next time the app opens.
+    cfg = config.Config()
+    cfg["tank_mode"] = True
+    cfg.save()
+
+    assert "tank_mode" not in json.loads(config_file.read_text())
+
+
+def test_tank_mode_starts_off_even_if_the_file_says_otherwise(config_file):
+    # Older files written before the setting became session-only still have
+    # it in them, and so does anything hand-edited.
+    config_file.write_text(json.dumps({"tank_mode": True, "all_users": False}))
+
+    cfg = config.Config()
+
+    assert cfg["tank_mode"] is False
+    assert cfg["all_users"] is False        # the rest still loads normally
+
+
+def test_saving_drops_a_session_key_an_older_version_left_behind(config_file):
+    config_file.write_text(json.dumps({"tank_mode": True, "tab": 3}))
+    cfg = config.Config()
+
+    cfg.save()
+
+    written = json.loads(config_file.read_text())
+    assert "tank_mode" not in written
+    assert written["tab"] == 3
+
+
 def test_corrupt_json_leaves_every_default_standing(config_file):
     config_file.write_text("{not json at all")
 
