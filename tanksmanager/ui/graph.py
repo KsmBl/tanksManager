@@ -26,7 +26,9 @@ import cairo
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gtk, Pango, PangoCairo  # noqa: E402
+from gi.repository import Gtk, Gdk, Pango, PangoCairo  # noqa: E402
+
+from .tankmode import Battlefield
 
 XP_PLATE = (0.0, 0.0, 0.0)
 XP_DARK = (0.0, 0.25, 0.0)          # #004000
@@ -129,8 +131,43 @@ class HistoryGraph(Gtk.DrawingArea):
         self.classic_series = classic_series
         self._data = [deque([0.0] * capacity, maxlen=capacity) for _ in range(series)]
         self._phase = 0
+        self._outline = []              # topmost series, for Tank Mode
+        self._battlefield = None
         self.set_size_request(-1, height)
         self.connect("draw", self._on_draw)
+
+    # -- tank mode ----------------------------------------------------------
+    def set_tank_mode(self, enabled: bool):
+        """Options > Tank Mode. Clicking the plate puts a round through it."""
+        if enabled and self._battlefield is None:
+            self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            self._battlefield = Battlefield(self, trace_y=self._trace_y)
+            self._press = self.connect("button-press-event", self._on_shoot)
+            self.set_tooltip_text("Tank Mode: click to fire.")
+        elif not enabled and self._battlefield is not None:
+            self._battlefield.clear()
+            self.disconnect(self._press)
+            self._battlefield = None
+            self.set_tooltip_text(None)
+            self.queue_draw()
+
+    def _on_shoot(self, _widget, event):
+        if event.button != Gdk.BUTTON_PRIMARY or self._battlefield is None:
+            return False
+        alloc = self.get_allocation()
+        self._battlefield.fire_at(event.x, event.y, alloc.width, alloc.height)
+        return True
+
+    def _trace_y(self, x):
+        """Pixel y of the topmost series at pixel x, for the fires to sit on."""
+        alloc = self.get_allocation()
+        h = max(1, alloc.height)
+        if not self._outline:
+            return h - 1.0
+        n = len(self._outline)
+        dx = max(1e-6, alloc.width / max(1, n - 1))
+        i = max(0, min(n - 1, int(round(x / dx))))
+        return h - self._outline[i] * (h - 1)
 
     # -- data ---------------------------------------------------------------
     def push(self, *values):
@@ -242,6 +279,17 @@ class HistoryGraph(Gtk.DrawingArea):
             cr.set_source_rgb(*colour)
             cr.set_line_width(pal.line_width)
             cr.stroke()
+
+        # Keep the highest line for Tank Mode to set its fires on.
+        if outlines:
+            self._outline = [max(values[i] for values in outlines)
+                             for i in range(n)]
+
+        if self._battlefield is not None:
+            # Craters go over the finished graph so the hole is punched
+            # through the data, then everything alight goes over the lot.
+            self._battlefield.draw_damage(cr, w, h)
+            self._battlefield.draw_fire(cr, w, h)
 
         cr.set_source_rgb(*pal.frame)
         cr.set_line_width(1.0)

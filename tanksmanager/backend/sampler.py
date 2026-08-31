@@ -45,6 +45,8 @@ class ProcInfo:
     cmdline: str
     exe: str
     terminal: str
+    unit: str           # systemd unit / cgroup leaf, "" when there is none
+    gpu: float          # 0..100 of the busiest engine, 0 unless measured
     is_own: bool
 
 
@@ -144,6 +146,37 @@ def _read_meminfo() -> dict:
     return out
 
 
+def _cgroup_unit(pid, proc_root="/proc") -> str:
+    """The systemd unit a process belongs to, from /proc/PID/cgroup.
+
+    On a systemd machine this answers "what is this thing part of" far better
+    than the parent PID does - every user application ends up in its own
+    .scope and every daemon in its .service.  Reads the v2 line first and
+    falls back to the v1 name=systemd controller.
+    """
+    try:
+        with open(f"{proc_root}/{pid}/cgroup", "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    path = ""
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        if parts[0] == "0" and parts[1] == "":          # cgroup v2
+            path = parts[2]
+            break
+        if parts[1] == "name=systemd":                  # cgroup v1
+            path = parts[2]
+    if not path or path == "/":
+        return ""
+    leaf = path.rstrip("/").rsplit("/", 1)[-1]
+    if leaf.endswith((".service", ".scope", ".slice", ".mount", ".socket")):
+        return leaf
+    return ""
+
+
 def _read_handles() -> int:
     try:
         with open("/proc/sys/fs/file-nr", "rb") as fh:
@@ -153,11 +186,11 @@ def _read_handles() -> int:
         return 0
 
 
-def _read_swaps() -> list:
+def _read_swaps(path="/proc/swaps") -> list:
     """/proc/swaps. Sizes there are in 1024-byte units, not bytes."""
     out = []
     try:
-        with open("/proc/swaps", "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             next(fh, None)                      # header
             for line in fh:
                 parts = line.split()
@@ -185,18 +218,21 @@ def _sysfs_int(path) -> int:
         return 0
 
 
-def _read_zram(swaps) -> list:
+def _read_zram(swaps, sys_block="/sys/block", mounts_path="/proc/mounts") -> list:
     """zram devices from sysfs.
 
     mm_stat is the modern one-line form; the individual attribute files are
     the fallback for kernels that predate it.
+
+    The paths are arguments rather than constants so the tests can point the
+    whole thing at a fake sysfs tree; nothing in the app passes them.
     """
     import glob
 
     swap_paths = {s.path for s in swaps}
     mounts = {}
     try:
-        with open("/proc/mounts", "r", encoding="utf-8") as fh:
+        with open(mounts_path, "r", encoding="utf-8") as fh:
             for line in fh:
                 parts = line.split()
                 if len(parts) >= 2 and parts[0].startswith("/dev/zram"):
@@ -205,7 +241,7 @@ def _read_zram(swaps) -> list:
         pass
 
     out = []
-    for base in sorted(glob.glob("/sys/block/zram*")):
+    for base in sorted(glob.glob(f"{sys_block}/zram*")):
         name = os.path.basename(base)
         disksize = _sysfs_int(f"{base}/disksize")
         if not disksize:
@@ -242,11 +278,10 @@ def _read_zram(swaps) -> list:
     return out
 
 
-def _zswap_params() -> tuple:
+def _zswap_params(base="/sys/module/zswap/parameters") -> tuple:
     """zswap sits in front of the swap devices: pages land in its RAM pool and
     only reach the device below on overflow. That is why /proc/swaps can show
     slots in use while a zram device reports almost nothing stored."""
-    base = "/sys/module/zswap/parameters"
     try:
         with open(f"{base}/enabled", "r", encoding="utf-8") as fh:
             enabled = fh.read().strip().upper() in ("Y", "1")
@@ -284,7 +319,7 @@ class ProcessSampler:
 
     def __init__(self):
         self._proc = {}     # pid -> psutil.Process
-        self._static = {}   # pid -> (name, exe, cmdline, username, create_time, terminal)
+        self._static = {}   # pid -> (name, exe, cmdline, username, ctime, terminal, unit)
         self._io = {}       # pid -> (read_bytes, write_bytes)
         self._uid = os.getuid()
 
@@ -309,7 +344,8 @@ class ProcessSampler:
             terminal = p.terminal() or ""
         except (psutil.AccessDenied, *_DEAD):
             terminal = ""
-        info = (p.name(), exe, cmdline, username, p.create_time(), terminal)
+        info = (p.name(), exe, cmdline, username, p.create_time(), terminal,
+                _cgroup_unit(key))
         self._static[key] = info
         return info
 
@@ -330,7 +366,8 @@ class ProcessSampler:
                 fresh = True
             try:
                 with p.oneshot():
-                    name, exe, cmdline, username, ctime, terminal = self._static_for(p)
+                    (name, exe, cmdline, username, ctime, terminal,
+                     unit) = self._static_for(p)
                     cpu_raw = p.cpu_percent(None)
                     if fresh:
                         cpu_raw = 0.0
@@ -356,6 +393,8 @@ class ProcessSampler:
                         cmdline=cmdline,
                         exe=exe,
                         terminal=terminal,
+                        unit=unit,
+                        gpu=0.0,
                         is_own=p.uids().real == self._uid,
                     )
                     try:
@@ -394,7 +433,8 @@ class SystemSampler:
         psutil.cpu_percent(None)
         psutil.cpu_times_percent(None, percpu=True)
 
-    def sample(self, interval: float, nprocs: int, nthreads: int) -> SystemSnapshot:
+    def sample(self, interval: float, nprocs: int, nthreads: int,
+               gpu_per_process: bool = False) -> SystemSnapshot:
         s = SystemSnapshot()
         s.ts = time.monotonic()
         s.interval = interval
@@ -499,9 +539,13 @@ class SystemSampler:
         self._disk = d or self._disk
 
         s.drives = self._drives.sample(interval)
-        s.gpus = self._gpus.sample()
+        s.gpus = self._gpus.sample(per_process=gpu_per_process)
 
         return s
+
+    def gpu_proc_busy(self) -> dict:
+        """pid -> GPU percent from the last sample, empty unless asked for."""
+        return self._gpus.proc_busy
 
 
 class Sampler(threading.Thread):
@@ -519,11 +563,17 @@ class Sampler(threading.Thread):
         self._procs = ProcessSampler()
         self._system = SystemSampler()
         self._paused = False
+        self._gpu_per_process = False
 
     # -- control ------------------------------------------------------------
     def set_interval(self, seconds: float):
         self._interval = seconds
         self._wake.set()
+
+    def set_gpu_per_process(self, enabled: bool):
+        """Per-process GPU use costs a full /proc/*/fdinfo walk, so it is only
+        measured while the GPU column is actually on screen."""
+        self._gpu_per_process = bool(enabled)
 
     def set_paused(self, paused: bool):
         self._paused = paused
@@ -550,7 +600,15 @@ class Sampler(threading.Thread):
             try:
                 procs = self._procs.sample(interval)
                 nthreads = sum(p.threads for p in procs)
-                system = self._system.sample(interval, len(procs), nthreads)
+                system = self._system.sample(interval, len(procs), nthreads,
+                                             self._gpu_per_process)
+                # The GPU walk happens inside the system pass, so the figures
+                # are stitched onto the processes afterwards rather than
+                # scanning /proc/*/fdinfo a second time.
+                if self._gpu_per_process:
+                    busy = self._system.gpu_proc_busy()
+                    for p in procs:
+                        p.gpu = busy.get(p.pid, 0.0)
                 self._deliver(Snapshot(system=system, procs=procs))
             except Exception as exc:  # a bad /proc read must not kill the thread
                 import traceback

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
-from .. import APP_NAME
+from .. import APP_ID, APP_NAME
 from ..backend import actions
 from ..backend.config import UPDATE_SPEEDS
 from ..backend.sampler import Sampler
@@ -37,7 +39,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_default_size(*(cfg["window"] or [760, 560]))
         if cfg["maximised"]:
             self.maximize()
-        self.set_icon_name("utilities-system-monitor")
+        # The installed icon if the theme has it, the stock one otherwise, so
+        # running straight from the source tree still gets a sensible icon.
+        if Gtk.IconTheme.get_default().has_icon(APP_ID):
+            self.set_icon_name(APP_ID)
+        else:
+            self.set_icon_name("utilities-system-monitor")
 
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
@@ -76,6 +83,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.proc_tab.connect("status-message", lambda _t, msg: self.set_status(msg))
 
         self.sampler = Sampler(self._deliver, UPDATE_SPEEDS[cfg["update_speed"]])
+        self.proc_tab.sync_sampler()        # the tab was built before the worker
         self.sampler.start()
 
         self.connect("delete-event", self._on_delete)
@@ -120,6 +128,9 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu = menu("_File")
         add(file_menu, "_New Task (Run...)", self.new_task)
         file_menu.append(Gtk.SeparatorMenuItem())
+        add(file_menu, "_Export Process List...", self.export_processes)
+        add(file_menu, "_Copy Process List", self.copy_processes)
+        file_menu.append(Gtk.SeparatorMenuItem())
         add(file_menu, "E_xit", lambda: self.get_application().quit())
 
         options = menu("_Options")
@@ -132,6 +143,11 @@ class MainWindow(Gtk.ApplicationWindow):
                 "window manager's own always-on-top binding.")
         add_check(options, "_Minimise On Use", "minimise_on_use")
         add_check(options, "_Confirm Before Ending A Process", "confirm_kill")
+        options.append(Gtk.SeparatorMenuItem())
+        tank = add_check(options, "Tan_k Mode", "tank_mode",
+                         lambda v: self.perf_tab.set_tank_mode(v))
+        tank.set_tooltip_text(
+            "Click a graph in the Performance tab to put a round through it.")
         options.append(Gtk.SeparatorMenuItem())
         add_check(options, "_Classic Graph Colours (green on black)",
                   "classic_graphs", self._apply_classic)
@@ -299,6 +315,42 @@ class MainWindow(Gtk.ApplicationWindow):
         command, as_shell = result
         errors = actions.run_new_task(command, as_shell)
         self.set_status(errors[0] if errors else f"Started {command}.")
+
+    def export_processes(self):
+        """Save the process list as CSV - the same rows, columns and order
+        that are on screen, which is what somebody attaching it to a bug
+        report actually wants."""
+        chooser = Gtk.FileChooserDialog(
+            title="Export Process List", transient_for=self,
+            action=Gtk.FileChooserAction.SAVE)
+        chooser.add_buttons("_Cancel", Gtk.ResponseType.CANCEL,
+                            "_Save", Gtk.ResponseType.ACCEPT)
+        chooser.set_do_overwrite_confirmation(True)
+        chooser.set_current_name(
+            time.strftime("processes-%Y%m%d-%H%M%S.csv"))
+        csv_filter = Gtk.FileFilter()
+        csv_filter.set_name("Comma separated values")
+        csv_filter.add_pattern("*.csv")
+        chooser.add_filter(csv_filter)
+        try:
+            if chooser.run() != Gtk.ResponseType.ACCEPT:
+                return
+            path = chooser.get_filename()
+        finally:
+            chooser.destroy()
+        if not path:
+            return
+        try:
+            count = self.proc_tab.export_csv(path)
+        except OSError as exc:
+            dialogs.show_error(self, "Could not write the file.", str(exc))
+            return
+        self.set_status(f"Exported {count} processes to {path}.")
+
+    def copy_processes(self):
+        count = self.proc_tab.copy_rows(selection_only=False)
+        self.set_status(f"Copied {count} processes to the clipboard."
+                        if count else "There is nothing to copy.")
 
     def go_to_process(self, pid):
         self.notebook.set_current_page(1)

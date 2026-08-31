@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tanksmanager"
+version = "1.0.0"
+description = "A Windows XP/7 style task manager for Linux desktops, built with GTK 3"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "KsmBL" }]
+keywords = [
+    "task-manager", "system-monitor", "process-manager",
+    "gtk3", "pygobject", "psutil", "linux",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+
+# PyGObject is deliberately not a hard requirement: on every distribution it
+# is a system package built against the local GTK, and letting pip compile it
+# from source needs gobject-introspection headers that most people do not
+# have.  Install python-gobject from your package manager; see the README.
+dependencies = ["psutil>=5.9"]
+
+[project.optional-dependencies]
+gui = ["PyGObject>=3.42"]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/KsmBl/tanksManager"
+Source = "https://github.com/KsmBl/tanksManager"
+Issues = "https://github.com/KsmBl/tanksManager/issues"
+
+[project.scripts]
+tanksmanager = "tanksmanager.app:main"
+
+[tool.setuptools.packages.find]
+include = ["tanksmanager*"]
+
+[tool.setuptools.data-files]
+"share/applications" = ["data/de.synthelicz.TanksManager.desktop"]
+"share/metainfo" = ["data/de.synthelicz.TanksManager.metainfo.xml"]
+"share/icons/hicolor/scalable/apps" = ["data/de.synthelicz.TanksManager.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

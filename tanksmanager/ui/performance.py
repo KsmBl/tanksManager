@@ -12,11 +12,21 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from .graph import XP_GREEN, XP_YELLOW
+from .graph import HistoryGraph, XP_GREEN, XP_YELLOW
 from .perfcards import ResourceCard
 from .perfpanes import (AutoScale, CpuPane, DiskPane, GpuPane, MemoryPane,
                         NetPane, NET_COLOURS, SWAP_COLOURS, XFER_COLOURS)
 from ..backend.units import bytes_h, bytes_pair, bits_rate, rate
+
+
+def _history_graphs(widget):
+    """Every HistoryGraph inside a pane, however deeply it is nested."""
+    if isinstance(widget, HistoryGraph):
+        yield widget
+        return
+    if isinstance(widget, Gtk.Container):
+        for child in widget.get_children():
+            yield from _history_graphs(child)
 
 SKIP_INTERFACES = ("lo",)
 
@@ -67,7 +77,19 @@ class PerformanceTab(Gtk.Box):
         if cpu is not None:
             cpu.set_one_graph_per_cpu(bool(self.cfg["one_graph_per_cpu"]))
             cpu.set_kernel_times(bool(self.cfg["show_kernel_times"]))
+        self.set_tank_mode(bool(self.cfg["tank_mode"]))
         self._select(self._pending_select)
+
+    def set_tank_mode(self, enabled):
+        """Arm, or stand down, every graph in the tab.
+
+        The panes are walked rather than asked, because a pane may hold one
+        graph or one per core, and a drive or GPU appearing brings a whole
+        new pane with it.
+        """
+        for pane in self.panes.values():
+            for graph in _history_graphs(pane):
+                graph.set_tank_mode(enabled)
 
     def set_classic(self, classic):
         for pane in self.panes.values():
@@ -124,6 +146,10 @@ class PerformanceTab(Gtk.Box):
         self.panes[key] = pane
         self.stack.add_named(pane, key)
         pane.show_all()
+        # A drive or GPU plugged in while Tank Mode is on arrives armed.
+        if self.cfg["tank_mode"]:
+            for graph in _history_graphs(pane):
+                graph.set_tank_mode(True)
         return card
 
     def _drop(self, key):

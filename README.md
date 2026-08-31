@@ -31,6 +31,16 @@ CPU affinity and a full properties window.
 
 ![Processes tab](screenshots/processes.png)
 
+### Tank Mode
+
+`Options ▸ Tank Mode` parks a tank on the baseline of every graph. Click the
+plate and it lays the barrel onto that point and puts a round through it —
+muzzle flash, a shell on a ballistic arc, an airburst, a crater blown out of
+the chart and the trace left burning until it goes out. It is painted over
+the finished graph and never touches the data.
+
+![Tank Mode](screenshots/tank-mode.png)
+
 ## Requirements
 
 | Distro | Packages |
@@ -49,6 +59,16 @@ on X11 window managers other than i3.
 ./run.sh --tab performance  # applications, processes, performance, users, services
 ./install.sh                # install into ~/.local (no root needed)
 sudo ./install.sh /usr/local
+```
+
+`install.sh` also puts the icon, the desktop entry and the AppStream metadata
+where your desktop expects to find them. There is a `pyproject.toml` as well,
+so `pip install .` works — but install PyGObject from your package manager
+first, because pip would otherwise try to build it against GTK headers most
+systems do not have:
+
+```sh
+pip install --user .        # after python-gobject is installed system-wide
 ```
 
 ## Tabs
@@ -169,13 +189,19 @@ always themed; only the graph plates are deliberately retro.
 
 ## What is new compared to the original
 
-* Live filter box (`Ctrl+F`) matching name, user, PID and command line
+* Live filter box (`Ctrl+F`) matching name, user, PID, systemd unit and command line
 * Process tree view, so children stay under the thing that started them
 * Kernel threads hidden by default (`View ▸ Show Kernel Threads`)
 * Per-process disk read/write rates, CPU time, terminal, command line
 * Full signal menu, not just "End Process" — including Stop and Continue
 * CPU affinity editor
-* A properties window with memory breakdown, open files, sockets, threads and environment
+* A properties window with memory breakdown, open files, sockets, threads, memory maps and environment
+* A **GPU** column showing what share of the busiest engine each process is using,
+  which even the Windows original only manages per-adapter
+* A **Unit** column naming the systemd service or scope a process belongs to —
+  usually a better answer to "what is this thing" than the parent PID
+* Export the process list to CSV, or copy it to the clipboard, exactly as it
+  appears on screen
 * A Windows 10 style card strip on the Performance tab, per drive / adapter / GPU,
   which replaces the separate Networking and Disks tabs entirely
 * GPU utilisation with a per-engine breakdown, from DRM fdinfo where no driver counter exists
@@ -184,6 +210,7 @@ always themed; only the graph plates are deliberately retro.
 * Swap broken down by backing store, zram device statistics and zswap accounting
 * systemd services for both the system manager and your user session
 * Column layout, sort order, window size and options remembered between runs
+* Tank Mode, for when a chart deserves it
 
 ## Keyboard
 
@@ -198,9 +225,12 @@ always themed; only the graph plates are deliberately retro.
 
 ## Notes for Wayland
 
-* The **Applications** tab enumerates windows through the sway/i3 IPC socket.
-  Other Wayland compositors do not expose a window list to applications; the
-  tab says so and everything else keeps working. On X11, install `wmctrl`.
+* Wayland has no protocol that lets an ordinary application enumerate other
+  windows, so the **Applications** tab has to ask the compositor directly. It
+  speaks sway and i3 over their IPC socket, Hyprland through `hyprctl` and
+  niri through `niri msg` — none of which costs a dependency, since each
+  ships with its compositor. On X11, install `wmctrl`. Anywhere else the tab
+  says so plainly and every other tab keeps working.
 * `Options ▸ Always On Top` is disabled on Wayland — stacking is the
   compositor's decision there. Use your WM's own binding, e.g. for sway:
 
@@ -221,7 +251,7 @@ tanksmanager/
 │   ├── gpu.py             GPU utilisation (sysfs, DRM fdinfo, nvidia-smi)
 │   ├── services.py        systemd
 │   ├── users.py           logind sessions
-│   ├── windows.py         sway/i3 IPC and wmctrl window lists
+│   ├── windows.py         sway/i3, Hyprland, niri and wmctrl window lists
 │   ├── icons.py           .desktop -> icon theme lookups
 │   ├── units.py           human formatting
 │   └── config.py          ~/.config/tanksmanager/config.json
@@ -231,6 +261,7 @@ tanksmanager/
     ├── table.py           keyed list view shared by the table tabs
     ├── perfcards.py       the Performance card strip
     ├── perfpanes.py       one detail pane per card
+    ├── tankmode.py        Tank Mode: shells, craters and fire
     └── processes.py …     the tabs
 ```
 
@@ -238,3 +269,23 @@ Sampling runs on a worker thread and hands immutable snapshots to the GTK main
 loop, so the interface never blocks on `/proc`. Rows are matched on PID and
 updated in place, which is why selection and scroll position survive the
 once-a-second refresh.
+
+## Tests
+
+```sh
+pip install pytest
+python -m pytest             # parser tests: no GTK, no display, no hardware
+python tests/smoke_gui.py    # builds the real window; needs a display
+```
+
+The parser tests point the sysfs and procfs readers at fake directory trees
+built in a temp directory, so swap layouts, zram configurations, cgroup
+formats, drive hotplug and DRM fdinfo counters can all be tested on a machine
+that has none of them. `smoke_gui.py` builds the whole window, visits every
+tab, fires a round in Tank Mode and shuts down again — it is what catches the
+construction-order mistakes a parser test never could. Both run in CI, along
+with a wheel build and validation of the desktop entry and AppStream data.
+
+## Licence
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).

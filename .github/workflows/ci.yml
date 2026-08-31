@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Parser tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # The parser tests read fake sysfs and procfs trees built in a temp
+      # directory, so they need neither GTK nor a display nor real hardware.
+      - run: python -m pip install --upgrade pip psutil pytest
+      - run: python -m pytest -q
+
+  gui:
+    name: GUI smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK 3 and PyGObject
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-psutil xvfb
+      # Building the window under Xvfb is what catches the mistakes the
+      # parser tests cannot: a widget constructed in the wrong order, an
+      # option applied before its children exist, a stale attribute name.
+      - name: Build the window and shut it down again
+        run: xvfb-run -a python3 tests/smoke_gui.py
+
+  lint:
+    name: Syntax and packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - name: Byte-compile every module
+        run: python -m compileall -q tanksmanager tests
+      - name: Build the wheel and the sdist
+        run: python -m build
+      - name: Validate the desktop entry and the AppStream data
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends desktop-file-utils appstream
+          desktop-file-validate data/de.synthelicz.TanksManager.desktop
+          appstreamcli validate data/de.synthelicz.TanksManager.metainfo.xml

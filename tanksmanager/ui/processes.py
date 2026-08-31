@@ -8,6 +8,8 @@ filter, a process tree, per-process I/O, signals and affinity.
 
 from __future__ import annotations
 
+import csv
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GObject, GLib, Pango  # noqa: E402
@@ -19,13 +21,13 @@ from ..backend.units import (bytes_h, kib, rate, cpu_time, wallclock,
 # --- model layout ---------------------------------------------------------
 (C_PID, C_ICON, C_NAME, C_USER, C_STATUS, C_CPU, C_RSS, C_VMS, C_SHARED,
  C_THREADS, C_NICE, C_CPUTIME, C_START, C_READ, C_WRITE, C_CMD, C_TTY,
- C_PPID, C_VISIBLE, C_OWN) = range(20)
+ C_PPID, C_VISIBLE, C_OWN, C_GPU, C_UNIT) = range(22)
 
 MODEL_TYPES = (
     int, str, str, str, str, float,
     GObject.TYPE_UINT64, GObject.TYPE_UINT64, GObject.TYPE_UINT64,
     int, int, float, float, float, float, str, str,
-    int, bool, bool,
+    int, bool, bool, float, str,
 )
 
 STATUS_LABELS = {
@@ -37,6 +39,11 @@ STATUS_LABELS = {
 
 def _f_cpu(_c, cell, model, it, _d):
     value = model.get_value(it, C_CPU)
+    cell.set_property("text", "" if value < 0.05 else f"{value:.1f}")
+
+
+def _f_gpu(_c, cell, model, it, _d):
+    value = model.get_value(it, C_GPU)
     cell.set_property("text", "" if value < 0.05 else f"{value:.1f}")
 
 
@@ -99,6 +106,8 @@ COLUMNS = [
     ("start",   "Started",      C_START,   _f_start,         False, False, 110),
     ("tty",     "Terminal",     C_TTY,     None,             False, False,  90),
     ("ppid",    "Parent PID",   C_PPID,    _f_int(C_PPID),   True,  False,  80),
+    ("gpu",     "GPU",          C_GPU,     _f_gpu,           True,  False,  56),
+    ("unit",    "Unit",         C_UNIT,    None,             False, False, 190),
     ("cmd",     "Command Line", C_CMD,     None,             False, False, 400),
 ]
 COLUMN_TITLES = {c[0]: c[1] for c in COLUMNS}
@@ -138,7 +147,8 @@ class ProcessTab(Gtk.Box):
         bar.set_border_width(6)
 
         self.search = Gtk.SearchEntry()
-        self.search.set_placeholder_text("Filter by name, user, PID or command line")
+        self.search.set_placeholder_text(
+            "Filter by name, user, PID, unit or command line")
         self.search.set_width_chars(28)
         self.search.connect("search-changed", lambda *_: self.refilter())
         self.search.connect("stop-search", lambda *_: self.search.set_text(""))
@@ -251,6 +261,20 @@ class ProcessTab(Gtk.Box):
         visible = set(visible) | {"name"}
         for cid, column in self._columns.items():
             column.set_visible(cid in visible)
+        self.sync_sampler()
+
+    def sync_sampler(self):
+        """Tell the worker which expensive figures anybody is looking at.
+
+        Per-process GPU use is the only one so far: it needs a walk of every
+        /proc/*/fdinfo, which is not worth paying for while the column is
+        hidden.  The sampler does not exist yet during construction, hence
+        the getattr.
+        """
+        sampler = getattr(self.window, "sampler", None)
+        if sampler is not None:
+            column = self._columns.get("gpu")
+            sampler.set_gpu_per_process(column is not None and column.get_visible())
 
     def visible_columns(self):
         return [cid for cid, col in self._columns.items() if col.get_visible()]
@@ -298,6 +322,8 @@ class ProcessTab(Gtk.Box):
             p.ppid,
             True,
             p.is_own,
+            p.gpu,
+            p.unit,
         )
 
     def update(self, procs):
@@ -320,6 +346,7 @@ class ProcessTab(Gtk.Box):
             if not needle or (needle in p.name.lower()
                               or needle in p.username.lower()
                               or needle in p.cmdline.lower()
+                              or needle in p.unit.lower()
                               or needle == str(p.pid)):
                 matched.add(p.pid)
 
@@ -581,6 +608,7 @@ class ProcessTab(Gtk.Box):
         add("Open _File Location", lambda: self._report(actions.open_location(procs[0].pid)),
             not many)
         add("_Copy Command Line", self._copy_cmdline)
+        add("Copy _Rows", lambda: self._report_count(self.copy_rows(True)))
         add("P_roperties", self.show_properties, not many)
 
         menu.show_all()
@@ -612,6 +640,96 @@ class ProcessTab(Gtk.Box):
             return
         text = "\n".join(p.cmdline or p.name for p in procs)
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+
+    # -- export -------------------------------------------------------------
+    def _cell_text(self, model, it, cid):
+        """The text a column shows, as plain text.
+
+        The view renders through cell data functions, which are not readable
+        from outside, so the same formatting is applied here.  Rates and
+        sizes keep their human-readable form: this goes to a person reading
+        a bug report, not to a spreadsheet doing arithmetic.
+        """
+        get = model.get_value
+        if cid == "name":
+            return get(it, C_NAME)
+        if cid == "pid":
+            return str(get(it, C_PID))
+        if cid == "user":
+            return get(it, C_USER)
+        if cid == "cpu":
+            value = get(it, C_CPU)
+            return "" if value < 0.05 else f"{value:.1f}"
+        if cid == "gpu":
+            value = get(it, C_GPU)
+            return "" if value < 0.05 else f"{value:.1f}"
+        if cid == "mem":
+            return kib(get(it, C_RSS))
+        if cid == "status":
+            raw = get(it, C_STATUS)
+            return STATUS_LABELS.get(raw, raw.title())
+        if cid == "cputime":
+            return cpu_time(get(it, C_CPUTIME))
+        if cid == "vms":
+            return bytes_h(get(it, C_VMS))
+        if cid == "shared":
+            return bytes_h(get(it, C_SHARED))
+        if cid == "threads":
+            return str(get(it, C_THREADS))
+        if cid == "nice":
+            return nice_label(get(it, C_NICE))
+        if cid == "read":
+            return rate(get(it, C_READ))
+        if cid == "write":
+            return rate(get(it, C_WRITE))
+        if cid == "start":
+            return wallclock(get(it, C_START))
+        if cid == "tty":
+            return get(it, C_TTY)
+        if cid == "ppid":
+            return str(get(it, C_PPID))
+        if cid == "unit":
+            return get(it, C_UNIT)
+        if cid == "cmd":
+            return get(it, C_CMD)
+        return ""
+
+    def export_rows(self, selection_only=False):
+        """The list exactly as it is on screen: same columns, same filter,
+        same sort order.  Returns (headers, rows)."""
+        columns = [cid for cid, _t, *_r in COLUMNS
+                   if self._columns[cid].get_visible()]
+        headers = [COLUMN_TITLES[cid] for cid in columns]
+        model = self.sorted
+        wanted = set(self.selected_pids()) if selection_only else None
+        rows = []
+
+        def walk(parent):
+            it = model.iter_children(parent)
+            while it is not None:
+                if wanted is None or model.get_value(it, C_PID) in wanted:
+                    rows.append([self._cell_text(model, it, cid) for cid in columns])
+                walk(it)
+                it = model.iter_next(it)
+
+        walk(None)
+        return headers, rows
+
+    def copy_rows(self, selection_only=True):
+        headers, rows = self.export_rows(selection_only)
+        if not rows:
+            return 0
+        text = "\n".join(["\t".join(headers)] + ["\t".join(r) for r in rows])
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        return len(rows)
+
+    def export_csv(self, path):
+        headers, rows = self.export_rows(False)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            writer.writerows(rows)
+        return len(rows)
         self.emit("status-message", "Command line copied to the clipboard.")
 
     # -- operations ---------------------------------------------------------
@@ -679,6 +797,11 @@ class ProcessTab(Gtk.Box):
         if not procs:
             return
         PropertiesDialog(self.window, procs[0].pid).show_all()
+
+    def _report_count(self, n):
+        self.emit("status-message",
+                  "Nothing selected to copy." if not n
+                  else f"Copied {n} row{'' if n == 1 else 's'} to the clipboard.")
 
     def _report(self, errors, success=""):
         if errors:

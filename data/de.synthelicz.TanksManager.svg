@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tanks Manager application icon.  The XP performance plate: black ground,
+     dark green grid, bright green trace, and the segmented meter down the
+     left hand side. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dcdcdc"/>
+      <stop offset="1" stop-color="#9a9a9a"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00ff00" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#00ff00" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- case -->
+  <rect x="6" y="10" width="116" height="108" rx="10" fill="url(#bezel)"/>
+  <rect x="6.5" y="10.5" width="115" height="107" rx="9.5" fill="none"
+        stroke="#6e6e6e" stroke-width="1"/>
+
+  <!-- title strip -->
+  <rect x="14" y="18" width="100" height="10" rx="3" fill="#3b6ea5"/>
+
+  <!-- meter plate -->
+  <rect x="14" y="34" width="26" height="76" fill="#000000"/>
+  <g fill="#004000">
+    <rect x="17" y="37" width="20" height="4"/><rect x="17" y="44" width="20" height="4"/>
+    <rect x="17" y="51" width="20" height="4"/><rect x="17" y="58" width="20" height="4"/>
+    <rect x="17" y="65" width="20" height="4"/><rect x="17" y="72" width="20" height="4"/>
+  </g>
+  <g fill="#00ff00">
+    <rect x="17" y="79" width="20" height="4"/><rect x="17" y="86" width="20" height="4"/>
+    <rect x="17" y="93" width="20" height="4"/><rect x="17" y="100" width="20" height="4"/>
+  </g>
+
+  <!-- graph plate -->
+  <rect x="46" y="34" width="68" height="76" fill="#000000"/>
+  <g stroke="#004000" stroke-width="2">
+    <path d="M46 53h68M46 72h68M46 91h68"/>
+    <path d="M65 34v76M84 34v76M103 34v76"/>
+  </g>
+
+  <!-- trace -->
+  <path d="M46 110 L46 96 L55 84 L62 92 L70 62 L78 74 L86 50 L95 66 L103 44 L110 58 L114 48 L114 110 Z"
+        fill="url(#glow)"/>
+  <path d="M46 96 L55 84 L62 92 L70 62 L78 74 L86 50 L95 66 L103 44 L110 58 L114 48"
+        fill="none" stroke="#00ff00" stroke-width="3.5"
+        stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

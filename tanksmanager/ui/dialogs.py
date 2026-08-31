@@ -162,6 +162,17 @@ class PropertiesDialog(Gtk.Window):
                 thread_text = str(threads)
             self.notebook.append_page(_mono_page(thread_text), Gtk.Label(label="Threads"))
 
+            maps = safe(p.memory_maps, [])
+            if isinstance(maps, list) and maps:
+                lines = [f"{'RSS':>10}  {'Size':>10}  Path"]
+                for m in sorted(maps, key=lambda m: -getattr(m, "rss", 0)):
+                    lines.append(f"{bytes_h(getattr(m, 'rss', 0)):>10}  "
+                                 f"{bytes_h(getattr(m, 'size', 0)):>10}  {m.path}")
+                maps_text = "\n".join(lines)
+            else:
+                maps_text = maps if isinstance(maps, str) else "(none)"
+            self.notebook.append_page(_mono_page(maps_text), Gtk.Label(label="Maps"))
+
             env = safe(p.environ, {})
             if isinstance(env, dict):
                 env_text = "\n".join(f"{k}={v}" for k, v in sorted(env.items())) or "(none)"

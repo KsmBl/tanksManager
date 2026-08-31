@@ -88,6 +88,34 @@ def get_affinity(pid):
         return None
 
 
+def _show_in_file_manager(path) -> bool:
+    """Reveal a file using the org.freedesktop.FileManager1 interface.
+
+    This is the desktop-wide "show item in folder" call: whichever file
+    manager the user actually has is activated over D-Bus and asked to open
+    the folder with the file selected.  Thunar, Nautilus, Dolphin, Nemo,
+    Caja and PCManFM all implement it, so it replaces guessing at a list of
+    binaries that would never have covered everybody's choice anyway.
+    """
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gio, GLib
+    except (ImportError, ValueError):
+        return False
+    try:
+        uri = GLib.filename_to_uri(path, None)
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync(
+            "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1", "ShowItems",
+            GLib.Variant("(ass)", ([uri], "")), None,
+            Gio.DBusCallFlags.NONE, 5000, None)
+        return True
+    except GLib.Error:
+        return False
+
+
 def open_location(pid) -> list:
     try:
         exe = psutil.Process(pid).exe()
@@ -95,16 +123,16 @@ def open_location(pid) -> list:
         return [str(exc)]
     if not exe:
         return ["This process has no executable on disk."]
-    for launcher in (["thunar", "--select"], ["nautilus", "--select"],
-                     ["dolphin", "--select"], ["nemo"], ["xdg-open"]):
-        try:
-            target = exe if launcher[0] != "xdg-open" else os.path.dirname(exe)
-            subprocess.Popen(launcher + [target],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return []
-        except FileNotFoundError:
-            continue
-    return ["No file manager found."]
+    if _show_in_file_manager(exe):
+        return []
+    # No FileManager1 provider on the bus: fall back to opening the folder
+    # with whatever handles directories.
+    try:
+        subprocess.Popen(["xdg-open", os.path.dirname(exe)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return []
+    except FileNotFoundError:
+        return ["No file manager found."]
 
 
 def run_new_task(command: str, as_shell: bool = False, cwd: str | None = None) -> list:

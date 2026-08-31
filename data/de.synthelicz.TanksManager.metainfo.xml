@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>de.synthelicz.TanksManager</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Tanks Manager</name>
+  <summary>Watch processes, performance and services</summary>
+
+  <developer id="de.synthelicz">
+    <name>KsmBL</name>
+  </developer>
+
+  <description>
+    <p>
+      Tanks Manager is a task manager for Linux desktops in the spirit of the
+      Windows XP and Windows 7 originals: a process table you can actually
+      read, and a performance view drawn on the old green-on-black plate.
+      It is a plain GTK 3 application, so it picks up the same theme and icons
+      as the rest of your desktop.
+    </p>
+    <p>What it shows:</p>
+    <ul>
+      <li>A live process table with a filter, a process tree, per-process CPU, memory, disk and GPU use, and the systemd unit each process belongs to</li>
+      <li>Signals, priority and CPU affinity, plus a properties window covering open files, sockets, threads, memory maps and the environment</li>
+      <li>A Windows 10 style card strip in the Performance tab: CPU, memory, network, one card per drive and one per GPU</li>
+      <li>Per-core CPU meters with kernel time drawn separately, sampled from a real XP screenshot down to the exact palette</li>
+      <li>Memory broken out into drive swap, zram and zswap, so it is always clear which is which</li>
+      <li>Drives and GPUs appearing and disappearing while the window is open</li>
+      <li>Logged-in users and systemd services</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">de.synthelicz.TanksManager.desktop</launchable>
+
+  <url type="homepage">https://github.com/KsmBl/tanksManager</url>
+  <url type="bugtracker">https://github.com/KsmBl/tanksManager/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Per-core CPU meters on the classic plate</caption>
+      <image>https://raw.githubusercontent.com/KsmBl/tanksManager/main/screenshots/performance-cpu.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Memory, drive swap and zram side by side</caption>
+      <image>https://raw.githubusercontent.com/KsmBl/tanksManager/main/screenshots/performance-memory.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The process table</caption>
+      <image>https://raw.githubusercontent.com/KsmBl/tanksManager/main/screenshots/processes.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+
+  <keywords>
+    <keyword>task</keyword>
+    <keyword>process</keyword>
+    <keyword>monitor</keyword>
+    <keyword>cpu</keyword>
+    <keyword>memory</keyword>
+    <keyword>performance</keyword>
+  </keywords>
+
+  <provides>
+    <binary>tanksmanager</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-31">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

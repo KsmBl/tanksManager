@@ -2,8 +2,15 @@
 
 Backends, in order of preference:
   * i3/sway IPC   - works on Wayland (sway) and X11 (i3), no extra deps
+  * Hyprland      - hyprctl, which ships with the compositor
+  * niri          - niri msg, which ships with the compositor
   * wmctrl        - any EWMH-compliant X11 window manager
 Anything else reports "unsupported" and the tab explains why.
+
+Wayland has no generic protocol an ordinary client may use to enumerate
+other applications' windows, so every entry above talks to one particular
+compositor.  Each of these ships its own control tool, which is why none of
+them costs a dependency: if the compositor is running, its tool is there.
 """
 
 from __future__ import annotations
@@ -132,6 +139,113 @@ class SwayBackend(Backend):
         return self._command(f"[con_id={handle}] kill")
 
 
+class _JsonToolBackend(Backend):
+    """Shared plumbing for compositors driven by their own JSON CLI."""
+
+    tool = ""
+
+    def _json(self, args, default=None):
+        try:
+            res = subprocess.run([self.tool] + args, capture_output=True,
+                                 text=True, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            return default
+        if res.returncode:
+            return default
+        try:
+            return json.loads(res.stdout or "null")
+        except ValueError:
+            return default
+
+    def _run(self, args) -> list:
+        try:
+            res = subprocess.run([self.tool] + args, capture_output=True,
+                                 text=True, timeout=3)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return [str(exc)]
+        if res.returncode:
+            return [res.stderr.strip() or f"{self.tool} failed"]
+        return []
+
+
+class HyprlandBackend(_JsonToolBackend):
+    name = "Hyprland"
+    tool = "hyprctl"
+
+    def __init__(self):
+        self.available = (bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+                          and bool(shutil.which(self.tool)))
+        self.reason = "" if self.available else "Not a Hyprland session."
+
+    def list_windows(self) -> list:
+        clients = self._json(["-j", "clients"], [])
+        if not isinstance(clients, list):
+            return []
+        out = []
+        for c in clients:
+            if not isinstance(c, dict):
+                continue
+            address = c.get("address")
+            if not address:
+                continue
+            workspace = c.get("workspace") or {}
+            out.append(WindowInfo(
+                handle=str(address),
+                title=c.get("title") or "(untitled)",
+                pid=int(c.get("pid") or 0),
+                app_id=c.get("class") or c.get("initialClass") or "",
+                workspace=str(workspace.get("name", "")),
+                focused=bool(c.get("focusHistoryID") == 0),
+                urgent=bool(c.get("urgent")),
+                # Hyprland's "special" workspaces are its scratchpad, and an
+                # unmapped client is one the compositor is not showing.
+                minimised=bool(c.get("hidden")) or not c.get("mapped", True),
+            ))
+        return out
+
+    def activate(self, handle) -> list:
+        return self._run(["dispatch", "focuswindow", f"address:{handle}"])
+
+    def close(self, handle) -> list:
+        return self._run(["dispatch", "closewindow", f"address:{handle}"])
+
+
+class NiriBackend(_JsonToolBackend):
+    name = "niri"
+    tool = "niri"
+
+    def __init__(self):
+        self.available = (bool(os.environ.get("NIRI_SOCKET"))
+                          and bool(shutil.which(self.tool)))
+        self.reason = "" if self.available else "Not a niri session."
+
+    def list_windows(self) -> list:
+        windows = self._json(["msg", "--json", "windows"], [])
+        if not isinstance(windows, list):
+            return []
+        out = []
+        for w in windows:
+            if not isinstance(w, dict) or w.get("id") is None:
+                continue
+            out.append(WindowInfo(
+                handle=str(w.get("id")),
+                title=w.get("title") or "(untitled)",
+                pid=int(w.get("pid") or 0),
+                app_id=w.get("app_id") or "",
+                workspace=str(w.get("workspace_id") or ""),
+                focused=bool(w.get("is_focused")),
+                urgent=bool(w.get("is_urgent")),
+                minimised=False,        # niri has no minimised state
+            ))
+        return out
+
+    def activate(self, handle) -> list:
+        return self._run(["msg", "action", "focus-window", "--id", str(handle)])
+
+    def close(self, handle) -> list:
+        return self._run(["msg", "action", "close-window", "--id", str(handle)])
+
+
 class WmctrlBackend(Backend):
     name = "wmctrl"
 
@@ -174,16 +288,18 @@ class WmctrlBackend(Backend):
 
 
 def detect() -> Backend:
-    for cls in (SwayBackend, WmctrlBackend):
+    for cls in (SwayBackend, HyprlandBackend, NiriBackend, WmctrlBackend):
         backend = cls()
         if backend.available:
             return backend
     fallback = Backend()
     if os.environ.get("XDG_SESSION_TYPE") == "wayland":
         fallback.reason = (
-            "Wayland compositors do not let an application enumerate other "
-            "windows. Tanks Manager supports sway and i3 through their IPC "
-            "socket; on X11 install wmctrl. Everything else in this window "
-            "works regardless."
+            "Wayland has no protocol that lets an application enumerate "
+            "other windows, so this list has to come from the compositor "
+            "itself. Tanks Manager can read sway and i3 over their IPC "
+            "socket, Hyprland through hyprctl and niri through niri msg. "
+            "On X11, install wmctrl. Everything else in this window works "
+            "regardless."
         )
     return fallback

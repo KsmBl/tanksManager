@@ -105,18 +105,25 @@ def _engine_label(raw: str) -> str:
     return raw.replace("-", " ").title()
 
 
-def scan_fdinfo() -> dict:
-    """pdev -> {"engines": {name: ns}, "mem": bytes, "clients": n}.
+def scan_fdinfo(proc_root="/proc") -> tuple:
+    """Walk /proc/*/fdinfo once and total up the DRM engine counters.
+
+    Returns (per_dev, per_pid):
+      per_dev  pdev -> {"engines": {name: ns}, "mem": bytes, "clients": n}
+      per_pid  pid  -> {engine name: ns}
 
     Several file descriptors can share one drm-client-id and each reports the
-    same running totals, so clients are de-duplicated before summing.
+    same running totals, so clients are de-duplicated before summing.  A
+    client inherited across a fork is attributed to whichever process we
+    reach first, which is the only attribution the kernel makes available.
     """
     per_dev = {}
+    per_pid = {}
     seen = {}
-    for pid in os.listdir("/proc"):
+    for pid in os.listdir(proc_root):
         if not pid.isdigit():
             continue
-        directory = f"/proc/{pid}/fdinfo"
+        directory = f"{proc_root}/{pid}/fdinfo"
         try:
             entries = os.listdir(directory)
         except OSError:
@@ -161,7 +168,10 @@ def scan_fdinfo() -> dict:
             bucket["mem"] += memory
             for name, ns in engines.items():
                 bucket["engines"][name] = bucket["engines"].get(name, 0) + ns
-    return per_dev
+            mine = per_pid.setdefault(int(pid), {})
+            for name, ns in engines.items():
+                mine[name] = mine.get(name, 0) + ns
+    return per_dev, per_pid
 
 
 class GpuSampler:
@@ -170,8 +180,10 @@ class GpuSampler:
         self._names_stale = False
         self._cards = self._detect()
         self._prev = {}                     # pdev -> {engine: ns}
+        self._prev_proc = {}                # pid -> {engine: ns}
         self._prev_ts = time.monotonic()
         self._nvidia = shutil.which("nvidia-smi")
+        self.proc_busy = {}                 # pid -> 0..100, last per-process pass
 
     def _detect(self):
         cards = []
@@ -244,7 +256,37 @@ class GpuSampler:
                 continue
         return stats
 
-    def sample(self) -> list:
+    def _update_proc_busy(self, per_pid, elapsed):
+        """Turn per-PID engine counters into a percentage.
+
+        A process can keep several engines busy at once, so taking the sum
+        would let it read well over 100 %.  The device total takes the
+        busiest engine and so does this, which keeps the column comparable
+        with the card it belongs to.
+        """
+        busy = {}
+        for pid, engines in per_pid.items():
+            prev = self._prev_proc.get(pid, {})
+            worst = 0.0
+            for name, ns in engines.items():
+                delta = ns - prev.get(name, ns)
+                if delta < 0:               # counters reset when a client exits
+                    delta = 0
+                worst = max(worst, min(100.0, delta / (elapsed * 1e9) * 100.0))
+            if worst > 0.0:
+                busy[pid] = worst
+        self.proc_busy = busy
+        self._prev_proc = per_pid
+
+    def sample(self, per_process: bool = False) -> list:
+        """Sample every adapter.
+
+        `per_process` additionally fills `self.proc_busy` with a percentage
+        per PID.  That needs a full walk of /proc/*/fdinfo (about 7 ms on a
+        busy desktop), which is why it is only done when something is
+        actually showing the figure - the device totals themselves usually
+        come from a single sysfs read instead.
+        """
         # Re-detected every sample (well under a millisecond) so an adapter
         # that appears or disappears - an eGPU, a USB display adapter - is
         # picked up the same way a hotplugged drive is.
@@ -261,7 +303,15 @@ class GpuSampler:
         need_fdinfo = any(
             not os.path.exists(f"{c['base']}/device/gpu_busy_percent")
             and c["driver"] != "nvidia" for c in self._cards)
-        fdinfo = scan_fdinfo() if need_fdinfo else {}
+        if need_fdinfo or per_process:
+            fdinfo, per_pid = scan_fdinfo()
+        else:
+            fdinfo, per_pid = {}, {}
+        if per_process:
+            self._update_proc_busy(per_pid, elapsed)
+        else:
+            self.proc_busy = {}
+            self._prev_proc = {}
         nvidia = self._nvidia_stats() if any(
             c["driver"] == "nvidia" for c in self._cards) else {}
 

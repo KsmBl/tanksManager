@@ -25,7 +25,9 @@ except Exception as exc:
              "Fedora: sudo dnf install python3-gobject gtk3 python3-psutil")
 PY
 
-install -d "$LIB" "$PREFIX/bin" "$PREFIX/share/applications"
+ICONS="$PREFIX/share/icons/hicolor/scalable/apps"
+install -d "$LIB" "$PREFIX/bin" "$PREFIX/share/applications" \
+           "$PREFIX/share/metainfo" "$ICONS"
 rm -rf "$LIB/tanksmanager"
 cp -r "$SRC/tanksmanager" "$LIB/tanksmanager"
 find "$LIB" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -40,8 +42,15 @@ sed "s|^Exec=tanksmanager|Exec=$PREFIX/bin/tanksmanager|" \
     "$SRC/data/de.synthelicz.TanksManager.desktop" \
     > "$PREFIX/share/applications/de.synthelicz.TanksManager.desktop"
 
+install -m 644 "$SRC/data/de.synthelicz.TanksManager.svg" "$ICONS/"
+install -m 644 "$SRC/data/de.synthelicz.TanksManager.metainfo.xml" \
+        "$PREFIX/share/metainfo/"
+
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -qtf "$PREFIX/share/icons/hicolor" 2>/dev/null || true
 fi
 
 echo "Done. Run 'tanksmanager' (make sure $PREFIX/bin is on your PATH)."
